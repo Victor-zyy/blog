@@ -14,7 +14,7 @@ clang-tidy clang-format gcc-doc pkg-config glibc-doc tcpdump tshark
 
 ** 2.1 Fetch a Web Page
 *** steps
-- [[[http://cs144.keithw.org/hello][web server address]]
+- [[http://cs144.keithw.org/hello][web server address]]
 - using telnet *telnet cs144.keithw.org http* to open a reliable byte stream between two computers.
 - First, Type *GET /hello HTTP/1.1* <kbd>Enter</kbd> the Enter is very important
 - Second, Type *Host: cs144.keithw.org* <kbd>Enter</kbd>
@@ -22,13 +22,13 @@ clang-tidy clang-format gcc-doc pkg-config glibc-doc tcpdump tshark
 - Finally, Type <kbd>Enter</kbd>
 
 *** explanation
-   *http://host/path*
+   --------*http://host/path*
    - GET tells the path part of the URL
    - Host tells the host part of the URL
    - close tells the server you finished the request
    - the last <kbd>Enter</kbd>tells the server you are done with the HTTP request
-After that:
-[[.img/cs144_web_page_result.png]]
+After that the result is as such.
+[[./img/cs144_web_page_result.png]]
 
 ** 2.2 Send yourself an email
     send an email massage using a reliable byte stream to a service running on another computer
@@ -38,20 +38,19 @@ I use 163-netease email to do this job for I am not standford student.These step
 - `telnet smtp.163.com smtp` or `telnet smtp.163.com 25` where port `25` is the smtp server port number
 - Type `HELO hello.victor` <kbd>Enter</kbd> it will echo `250 OK` the response code number starts with 2xx or 3xx is great to indicate connection is right! But when the response code number is 5xx, it tells you that something was wrong.
 - Type `EHLO hello.victor` it will print it out something you need to do to authentication.
-![EHLO_smtp](img/EHLO_smtp.png)
-- After that, you need to login in by type `AUTH LOGIN` , when you do that, you have to type **base64** coded you user name and vertification code.[[[https://www.base64decode.org/][base64 converter]] This page will help you to do so, last but no least you have to set you own vertification code in your 163-email website.
+[[./img/EHLO_smtp.png]]
+- After that, you need to login in by type `AUTH LOGIN` , when you do that, you have to type **base64** coded you user name and vertification code.[[https://www.base64decode.org/][base64 converter]] This page will help you to do so, last but no least you have to set you own vertification code in your 163-email website.
 - When authentication is successfully, you are allowed to send an email.
  [[./img/result_smtp.png]]
 
   as you can see from the picture, after authentication, we can send email from byte stream by typing `MAIL FROM:` and `RCPT TO:`, don't forget to add an <kbd><></kbd>around your email address. When you type Data, you have to leave a blank line at the end of the headers. When finished the body, type <kbd>.Enter</kbd>to end this edit. With all things done, type `quit` to end the conversation with the email.
 
-
 telnet: a client that makes outgoing connection with programs running on other computers. Let's to be a simple server, which is kind of program that waits around for clients to connect it.
 
 ** 2.3 Listening and connecting
-![netcat_server](img/netcat_server.png)
+[[./img/netcat_server.png]]
 The netcat command `v` to produce more verbose output, and `-l` to listening a port and `-p` to designate port number 9090, the telnet to connect this server, which localhost indicates the same ip address shared each other.
-![client_and_server](img/client_and_server.png)
+[[./img/client_and_server.png]]
 This picture indicates this communication.
 
 * 3 Writing a network program using an OS stream socket
