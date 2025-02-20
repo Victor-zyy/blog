@@ -10,7 +10,7 @@ clang-tidy clang-format gcc-doc pkg-config glibc-doc tcpdump tshark
 #+end_src
 * 2 Networking by hand
 
-    networking abstraction        ---reliable bidirectional byte stream
+   networking abstraction        ---reliable bidirectional byte stream
 
 ** 2.1 Fetch a Web Page
 *** steps
@@ -41,6 +41,8 @@ I use 163-netease email to do this job for I am not standford student.These step
 [[./img/EHLO_smtp.png]]
 - After that, you need to login in by type `AUTH LOGIN` , when you do that, you have to type **base64** coded you user name and vertification code.[[https://www.base64decode.org/][base64 converter]] This page will help you to do so, last but no least you have to set you own vertification code in your 163-email website.
 - When authentication is successfully, you are allowed to send an email.
+#+ATTR_HTML: :align center
+#+ATTR_HTML: :width 300px
  [[./img/result_smtp.png]]
 
   as you can see from the picture, after authentication, we can send email from byte stream by typing `MAIL FROM:` and `RCPT TO:`, don't forget to add an <kbd><></kbd>around your email address. When you type Data, you have to leave a blank line at the end of the headers. When finished the body, type <kbd>.Enter</kbd>to end this edit. With all things done, type `quit` to end the conversation with the email.
@@ -54,4 +56,145 @@ The netcat command `v` to produce more verbose output, and `-l` to listening a p
 This picture indicates this communication.
 
 * 3 Writing a network program using an OS stream socket
-we are gonna to use the feature provided by operating system (Linux) that the ability to create a reliable bidirectional byte stream between two commputers.----*Stream Socket*
+
+we are gonna to use the feature provided by operating system (Linux) that the ability to create a reliable bidirectional byte stream between two commputers.---- *Stream Socket*
+
+** 3.1 webget 
+
+TCPSocket Class - in mindow project, the socket class lib is wrapped around using C++ and can be called from C code.
+
+*** TCPSocket Class
+
+**** inheritance relationship
+
+this image shows up the inheritance relationship.
+#+ATTR_HTML: :align center
+#+ATTR_HTML: :width 300px
+#+ATTR_ORG: :align center
+[[./img/lab0_webget_inheritance.png]]
+
+***** FileDescriptor Class
+
+- copy/move constructor and assignment
+
+[[https://en.cppreference.com/w/cpp/language/copy_constructor][Copy Constructor Ref Detail]]
+
+A copy constructor is a constructor which can be called with *an argument of the same class type* and copies the content of the argument without mutating the argument. 
+
+argument list must satisfy all following conditions
+1. given the class type *T*, the argument list must be a reference of T
+2. it will be T&, const T &, volatile T&, const volatile T&
+note: it can have multiple args but at least ref of class in it.
+
+When copy constructor is called?
+- initialization T a = b; T a(b); where b is class of T.
+- function arg passing void f(T a).
+- function return value, which has no move constructor. T f(){ return a}
+
+[[https://en.cppreference.com/w/cpp/language/copy_assignment][Copy Assignment Ref Detail]]
+
+argument list must satisfy all following conditions
+1. given the class type *T*, the argument list must be a reference of T and T
+2. it will be T, T&, const T &, volatile T&, const volatile T&
+note: it must have one argument.
+
+When to call the copy assignment?
+
+The copy assignment operator is called whenever selected by overload resolution, e.g. when an object appears on the left side of an assignment expression. 
+
+like: f1 = f2; operator= is selected when overload resoluting.
+
+[[https://en.cppreference.com/w/cpp/language/copy_constructor][Move Constructor Ref Detail]]
+
+argument list must satisfy all following conditions
+1. given the class type *T*, the argument list must be && like.
+2. it will be  T&&, const T &&, volatile T&&, const volatile T&&.
+
+When to call the move constructor?
+
+-  initialization like T a = std::move(b)
+- argument passing f(std::move(a)
+- return type like return a T f()
+
+[[https://en.cppreference.com/w/cpp/language/move_assignment][Move Assignment Ref Detail]]
+
+like a = std::move(a2)
+The copy assignment operator is called whenever selected by overload resolution, e.g. when an object appears on the left side of an assignment expression. 
+
+#+begin_src c++
+
+    // An FDWrapper cannot be copied or moved
+    FDWrapper( const FDWrapper& other ) = delete;
+    // copy constructor
+    FDWrapper& operator=( const FDWrapper& other ) = delete;
+    // copy assignment
+    FDWrapper( FDWrapper&& other ) = delete;
+    // move constructor
+    FDWrapper& operator=( FDWrapper&& other ) = delete;
+    // move assignment
+#+end_src
+
+*** webget sequence 
+
+the sequence of tcp connect is like this..
+- construct TCPSocket
+- construct Address
+- connect
+- write buffer to get url page
+- wait to read like string operation
+  
+  all these functions will call CheckSystemCall and then unix_error will call kernel api like socket connect and or so.
+
+#+begin_src c++
+
+class unix_error : public tagged_error
+{
+public:
+  explicit unix_error( const std::string_view s_attempt, const int s_errno = errno )
+    : tagged_error( std::system_category(), s_attempt, s_errno )
+  {}
+};
+
+#+end_src
+
+** 3.2 byte stream
+
+In this section I will implement a pipe like byte stream, which a Writer puts data into the pipe and the Reader pops it.
+
+After reading the check0.pdf, I firstly choose string as a ring buffer.
+
+**** compile error and run error
+
+#+begin_src sh
+$ cmake --build build --target check0
+it will print out this message like that infinitely.
+AddressSanitizer:DEADLYSIGNAL
+AddressSanitizer:DEADLYSIGNAL
+AddressSanitizer:DEADLYSIGNAL
+AddressSanitizer:DEADLYSIGNAL
+AddressSanitizer:DEADLYSIGNAL
+AddressSanitizer:DEADLYSIGNAL
+AddressSanitizer:DEADLYSIGNAL
+#+end_src
+
+After that I search from StackOverflow, it turns out that the linux setting is not suitable for clang. The solution for this is 
+#+begin_src sh
+$sudo sysctl vm.mmap_rhd_bits=28(check the value by sudo sysctl vm.mmap_rhd_bits)
+after reboot this change will disappear. And if I wanna pernament change this setting, I have to change the etc file of /etc/sysctl.conf
+add `vm.mmap_rhd_bits=28` in this file 
+$sudo sysctl -p
+if not just reboot
+#+end_src
+**** std::string_view
+The std::string_view class I don't fully understand, so I failed in peek tests. That is a ring buffer is wrapped around when start and end pointers are not equal, and string_view class needs a sequence char in memory. So i fail in the peek tests.
+
+After that, I switch to deque/queue. In this way, I passed 7 tests, but stuck in 8 peek tests, 
+[[./img/c++_error_heap_overflow.png]]
+
+it says that heap buffer overflow when I didn't use gdb in eshell. The reason why i got this error is still string_view needs a sequence capture char in memory. And deque/queue implementation is chunks of memory linked, each set of memory is in sequence but not all the items. I use gdb to prove that.
+[[./img/c++_error_deque.png]]
+[[./img/c++_error_deque2.png]]
+
+From the picture, we can see that the deque has discontinuous memory address the same as queue, that's why I get this error for several days to handle.
+
+Then I switched to list vector as my pipe container. Everything works great, except that string_view must constructs with continuous iterator, we all knew that linked-list has discontinous items when inset and remove.
