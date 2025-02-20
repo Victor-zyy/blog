@@ -240,3 +240,5 @@ That is because Peek function is a const member function which has no right to c
 
 After adopting this way, I finally successfully passed the tests, though the speed is not so fast but i give in my efforts. There are a lot of efforts to take to make the code looks great and faster. I will do it in the future.
 [[./img/lab0_c++_successfully.png]]
+
+@@html:<kbd>RET</kbd>@@
