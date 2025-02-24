@@ -16,17 +16,17 @@ clang-tidy clang-format gcc-doc pkg-config glibc-doc tcpdump tshark
 *** steps
 - [[http://cs144.keithw.org/hello][web server address]]
 - using telnet *telnet cs144.keithw.org http* to open a reliable byte stream between two computers.
-- First, Type *GET /hello HTTP/1.1* <kbd>Enter</kbd> the Enter is very important
-- Second, Type *Host: cs144.keithw.org* <kbd>Enter</kbd>
-- Third, Type *Connection: close* <kbd>Enter</kbd>
-- Finally, Type <kbd>Enter</kbd>
+- First, Type *GET /hello HTTP/1.1* `Enter` the Enter is very important
+- Second, Type *Host: cs144.keithw.org* `Enter`
+- Third, Type *Connection: close* `Enter``
+- Finally, Type `Enter`
 
 *** explanation
    -------- *http://host/path*
    - GET tells the path part of the URL
    - Host tells the host part of the URL
    - close tells the server you finished the request
-   - the last <kbd>Enter</kbd>tells the server you are done with the HTTP request
+   - the last `Enter`tells the server you are done with the HTTP request
 After that the result is as such.
 [[./img/lab0_cs144_web_page_result.png]]
 
@@ -36,7 +36,7 @@ I use 163-netease email to do this job for I am not standford student.These step
 - go to the setting of the 163-email to enable smtp server
 - Then using telnet to construct a connection between two computers
 - `telnet smtp.163.com smtp` or `telnet smtp.163.com 25` where port `25` is the smtp server port number
-- Type `HELO hello.victor` <kbd>Enter</kbd> it will echo `250 OK` the response code number starts with 2xx or 3xx is great to indicate connection is right! But when the response code number is 5xx, it tells you that something was wrong.
+- Type `HELO hello.victor` `Enter` it will echo `250 OK` the response code number starts with 2xx or 3xx is great to indicate connection is right! But when the response code number is 5xx, it tells you that something was wrong.
 - Type `EHLO hello.victor` it will print it out something you need to do to authentication.
 [[./img/lab0_EHLO_smtp.png]]
 - After that, you need to login in by type `AUTH LOGIN` , when you do that, you have to type **base64** coded you user name and vertification code.[[https://www.base64decode.org/][base64 converter]] This page will help you to do so, last but no least you have to set you own vertification code in your 163-email website.
@@ -45,7 +45,7 @@ I use 163-netease email to do this job for I am not standford student.These step
 #+ATTR_HTML: :width 300px
  [[./img/lab0_result_smtp.png]]
 
-  as you can see from the picture, after authentication, we can send email from byte stream by typing `MAIL FROM:` and `RCPT TO:`, don't forget to add an <kbd><></kbd>around your email address. When you type Data, you have to leave a blank line at the end of the headers. When finished the body, type <kbd>.Enter</kbd>to end this edit. With all things done, type `quit` to end the conversation with the email.
+  as you can see from the picture, after authentication, we can send email from byte stream by typing `MAIL FROM:` and `RCPT TO:`, don't forget to add an `<>`around your email address. When you type Data, you have to leave a blank line at the end of the headers. When finished the body, type `Enter`to end this edit. With all things done, type `quit` to end the conversation with the email.
 
 telnet: a client that makes outgoing connection with programs running on other computers. Let's to be a simple server, which is kind of program that waits around for clients to connect it.
 
@@ -241,4 +241,3 @@ That is because Peek function is a const member function which has no right to c
 After adopting this way, I finally successfully passed the tests, though the speed is not so fast but i give in my efforts. There are a lot of efforts to take to make the code looks great and faster. I will do it in the future.
 [[./img/lab0_c++_successfully.png]]
 
-@@html:<kbd>RET</kbd>@@

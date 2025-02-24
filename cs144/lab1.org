@@ -1,0 +1,52 @@
+* Overview 
+** Course Learn
+
+operations idempotency meaning:
+Idempotency is a property of certain operations or API requests that ensures performing the operation multiple times yields the same result as if it were executed only once. (GET PUT) 
+And the result we expect is *result form* not *result value*.
+
+A non-idempotent operation, on the other hand, changes the state with each execution, meaning that subsequent calls with the same input can yield different results. This is crucial to recognize because it can lead to unintended side effects when such operations are repeated. (POST)
+
+short packets data can be 
+- lost
+- reorder
+- alter
+- duplicate
+
+** line of code
+
+From the startup code, i used almost 122 lines of code to design ByteStream in lab0 which is larger than  TA in class - 82 lines of code. 
+
+how to run this scripts ?
+
+#+begin_src sh
+$ sudo apt install slocount
+$ ./scripts/lines-of-code ; in mindow directory
+             ByteStream:   122 lines of code
+             Reassembler:   26 lines of code
+$ 
+             ByteStream:    82 lines of code
+             Reassembler:   26 lines of code
+#+end_src
+** TCP Receiver
+
+In this assignment , what you're gonna do is to rearrage the bytestream form unreliable to reliable and then to offer to the Socket that can be read by the web-application like webget, etc.
+
+why do this ? 
+
+TCP robustness against reordering and duplication comes form its ability to stitch arbitrary excerpts of the byte stream back into the original stream. Implementing this in a discrete testable module will make handling incoming segments easier.
+
+*** Incoming Substring
+
+
+#+begin_src 
+
+"abcdefghaaa"
+
+{index: 0, "abcd"}
+{index: 4, "efg"}
+{index: 7, "ha"}
+{index: 9, "aa", last_string: ture}
+.etc.
+#+end_src
+* Outline of ReAssember Class

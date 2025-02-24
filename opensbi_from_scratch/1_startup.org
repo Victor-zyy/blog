@@ -1,0 +1,640 @@
+* fw_base.S 
+
+** cold boot stage
+
+- relocate link_address != load_addess  LMA != VMA
+- reset boot hart regs
+- clear bss section
+- setup temporary trap handler and temporary stack, then jump to C-code 
+
+|---------|<----------sp  grows down
+|         |
+|---------|
+|         |
+|---------|
+|         |
+|---------|
+
+- fw_platform_init C code we defined in platform directory.
+- preload hartid details *SBI_SCRATCH*
+  
+#+begin_src c
+/** Representation of per-HART scratch space */
+struct sbi_scratch {
+	/** Start (or base) address of firmware linked to OpenSBI library */
+	unsigned long fw_start;
+	/** Size (in bytes) of firmware linked to OpenSBI library */
+	unsigned long fw_size;
+	/** Arg1 (or 'a1' register) of next booting stage for this HART */
+	unsigned long next_arg1;  // device_tree address
+	/** Address of next booting stage for this HART */
+	unsigned long next_addr; // jump_addr
+	/** Priviledge mode of next booting stage for this HART */
+	unsigned long next_mode; // M-S-U
+	/** Warm boot entry point address for this HART */
+	unsigned long warmboot_addr; // _warm_start
+	/** Address of sbi_platform */
+	unsigned long platform_addr; // platform address
+	/** Address of HART ID to sbi_scratch conversion function */
+	unsigned long hartid_to_scratch; 
+	/** Address of trap exit function */
+	unsigned long trap_exit;
+	/** Temporary storage */
+	unsigned long tmp0;
+	/** Options for OpenSBI library */
+	unsigned long options;  // fw_options
+};
+
+// warmboot and coldboot
+
+// firmware/fw_jump.S
+// fw_next_addr
+_jump_addr:
+	RISCV_PTR FW_JUMP_ADDR
+        
+// hartid_to_scratch
+// Every hart has a Scratch m_scratch to points to it
+
+#+end_src
+
+
+- relocate fdt( flatened device tree)
+- boot hart done and jump warm boot from cold boot
+  
+#+begin_src c
+
+/** Representation of a platform */
+struct sbi_platform {
+	/**
+	 * OpenSBI version this sbi_platform is based on.
+	 * It's a 32-bit value where upper 16-bits are major number
+	 * and lower 16-bits are minor number
+	 */
+	u32 opensbi_version;
+	/**
+	 * OpenSBI platform version released by vendor.
+	 * It's a 32-bit value where upper 16-bits are major number
+	 * and lower 16-bits are minor number
+	 */
+	u32 platform_version;
+	/** Name of the platform */
+	char name[64];
+	/** Supported features */
+	u64 features;
+	/** Total number of HARTs */
+	u32 hart_count;
+	/** Per-HART stack size for exception/interrupt handling */
+	u32 hart_stack_size;
+	/** Pointer to sbi platform operations */
+	unsigned long platform_ops_addr;
+	/** Pointer to system firmware specific context */
+	unsigned long firmware_context;
+	/**
+	 * HART index to HART id table
+	 *
+	 * For used HART index <abc>:
+	 *     hart_index2id[<abc>] = some HART id
+	 * For unused HART index <abc>:
+	 *     hart_index2id[<abc>] = -1U
+	 *
+	 * If hart_index2id == NULL then we assume identity mapping
+	 *     hart_index2id[<abc>] = <abc>
+	 *
+	 * We have only two restrictions:
+	 * 1. HART index < sbi_platform hart_count
+	 * 2. HART id < SBI_HARTMASK_MAX_BITS
+	 */
+	const u32 *hart_index2id;
+};
+
+#+end_src
+
+** warm boot stage
+
+warm boot for cold boot hart and non-boot hart
+
+- reset all regs call _reset_args (except for ra and a0 a1 a2)
+- disable and clear interrupts
+- find the scratch based on the hartid ( initialize in hart_index2id )
+- set up stack sp (stack size is 0x1000)
+  |--------|0x....3000
+  |--------|
+  |--------|<-----sp 0x...2000  m_scratch
+  |--------|
+  |--------|0x...1000
+- set up trap_handler real
+- jump to sbi_init main function in C code
+#+begin_src asm
+
+	/* Initialize SBI runtime */
+	csrr	a0, CSR_MSCRATCH
+	call	sbi_init
+#+end_src
+
+* sbi_init
+
+in sbi_init call procedure, this function has to check whether the next priviledge mode is supported, if not , hang the hart. Due to coldboot, each hart jump into the next two functions to init. But the coldboot must call once. Note: no return function call.
+** coldboot_init
+*** sbi_scratch_init
+
+sbi_scratch_init to let each hart has scratch initialized in *hartid_to_scratch_table*.
+
+#+begin_src c
+
+u32 last_hartid_having_scratch = SBI_HARTMASK_MAX_BITS; //128
+struct sbi_scratch *hartid_to_scratch_table[SBI_HARTMASK_MAX_BITS] = { 0 };
+
+typedef struct sbi_scratch *(*hartid2scratch)(ulong hartid, ulong hartindex);
+
+int sbi_scratch_init(struct sbi_scratch *scratch)
+{
+	u32 i;
+	const struct sbi_platform *plat = sbi_platform_ptr(scratch);
+
+	for (i = 0; i < SBI_HARTMASK_MAX_BITS; i++) {
+		if (sbi_platform_hart_invalid(plat, i))
+			continue;
+           // scratch->hartid_to_scratch = _hartid_to_scratch definedin 
+           // fw_base.S
+		hartid_to_scratch_table[i] =
+			((hartid2scratch)scratch->hartid_to_scratch)(i,
+					sbi_platform_hart_index(plat, i));
+		if (hartid_to_scratch_table[i])
+			last_hartid_having_scratch = i;
+	}
+
+	return 0;
+}
+#+end_src
+
+#+begin_src asm
+	.section .entry, "ax", %progbits
+	.align 3
+	.globl _hartid_to_scratch
+_hartid_to_scratch:
+	/*
+	 * a0 -> HART ID (passed by caller)
+	 * a1 -> HART Index (passed by caller)
+	 * t0 -> HART Stack Size
+	 * t1 -> HART Stack End
+	 * t2 -> Temporary
+	 */
+	la	t2, platform
+#if __riscv_xlen == 64
+	lwu	t0, SBI_PLATFORM_HART_STACK_SIZE_OFFSET(t2)
+	lwu	t2, SBI_PLATFORM_HART_COUNT_OFFSET(t2)
+#else
+	lw	t0, SBI_PLATFORM_HART_STACK_SIZE_OFFSET(t2)
+	lw	t2, SBI_PLATFORM_HART_COUNT_OFFSET(t2)
+#endif
+	sub	t2, t2, a1
+	mul	t2, t2, t0
+	la	t1, _fw_end
+	add	t1, t1, t2
+	li	t2, SBI_SCRATCH_SIZE
+	sub	a0, t1, t2
+	ret
+#+end_src
+
+
+*** sbi_domain_init
+
+1. initialize root_memregs include FW, ALL,
+
+#+begin_src c
+
+#define ROOT_FW_REGION        0
+#define ROOT_ALL_REGION	1
+#define ROOT_END_REGION	2
+static struct sbi_domain_memregion root_memregs[ROOT_END_REGION + 1] = { 0 };
+
+/** Representation of OpenSBI domain memory region */
+struct sbi_domain_memregion {
+	/**
+	 * Size of memory region as power of 2
+	 * It has to be minimum 3 and maximum __riscv_xlen
+	 */
+	unsigned long order;
+	/**
+	 * Base address of memory region
+	 * It must be 2^order aligned address
+	 */
+	unsigned long base;
+	/** Flags representing memory region attributes */
+#define SBI_DOMAIN_MEMREGION_READABLE		(1UL << 0)
+#define SBI_DOMAIN_MEMREGION_WRITEABLE		(1UL << 1)
+#define SBI_DOMAIN_MEMREGION_EXECUTABLE		(1UL << 2)
+#define SBI_DOMAIN_MEMREGION_MMODE		(1UL << 3)
+#define SBI_DOMAIN_MEMREGION_ACCESS_MASK	(0xfUL)
+
+#define SBI_DOMAIN_MEMREGION_MMIO		(1UL << 31)
+	unsigned long flags;
+};
+
+#+end_src
+
+2. initialize specific domain
+
+
+#+begin_src c
+
+static struct sbi_domain root = {
+	.name = "root",
+	.possible_harts = &root_hmask,
+	.regions = root_memregs,
+	.system_reset_allowed = TRUE,
+};
+
+/** Representation of OpenSBI domain */
+struct sbi_domain {
+	/**
+	 * Logical index of this domain
+	 * Note: This set by sbi_domain_finalize() in the coldboot path
+	 */
+	u32 index;
+	/**
+	 * HARTs assigned to this domain
+	 * Note: This set by sbi_domain_init() and sbi_domain_finalize()
+	 * in the coldboot path
+	 */
+	struct sbi_hartmask assigned_harts;
+	/** Name of this domain */
+	char name[64];
+	/** Possible HARTs in this domain */
+	const struct sbi_hartmask *possible_harts;
+	/** Array of memory regions terminated by a region with order zero */
+	struct sbi_domain_memregion *regions;
+	/** HART id of the HART booting this domain */
+	u32 boot_hartid;
+	/** Arg1 (or 'a1' register) of next booting stage for this domain */
+	unsigned long next_arg1;
+	/** Address of next booting stage for this domain */
+	unsigned long next_addr;
+	/** Privilege mode of next booting stage for this domain */
+	unsigned long next_mode;
+	/** Is domain allowed to reset the system */
+	bool system_reset_allowed;
+};
+#+end_src
+
+3. domain_register
+
+#+begin_src c
+
+struct sbi_domain *domidx_to_domain_table[SBI_DOMAIN_MAX_INDEX] = { 0 };
+static u32 domain_count = 0;
+
+#+end_src
+
+
+*** sbi_scratch_alloc_offset 
+
+ remain to handle
+#+begin_src c
+struct sbi_scratch {
+       // ....
+	/** Temporary storage */
+	unsigned long tmp0;
+}
+#+end_src
+
+
+*** sbi_hsm_init
+
+#+begin_src c
+
+/** Per hart specific data to manage state transition **/
+struct sbi_hsm_data {
+	atomic_t state;
+};
+
+typedef struct {
+	volatile long counter;
+} atomic_t;
+
+#+end_src
+
+
+*** sbi_platform_early_init
+
+#+begin_src c
+
+static inline int sbi_platform_early_init(const struct sbi_platform *plat,
+					  bool cold_boot)
+{
+	if (plat && sbi_platform_ops(plat)->early_init)
+		return sbi_platform_ops(plat)->early_init(cold_boot);
+	return 0;
+}
+
+
+static int quard_star_early_init(bool cold_boot)
+{
+	if (!cold_boot)
+		return 0;
+
+	return fdt_reset_init();
+}
+
+int fdt_reset_init(void)
+{
+	int pos, noff, rc;
+	struct fdt_reset *drv;
+	const struct fdt_match *match;
+	void *fdt = sbi_scratch_thishart_arg1_ptr();
+
+	for (pos = 0; pos < array_size(reset_drivers); pos++) {
+		drv = reset_drivers[pos];
+
+		noff = fdt_find_match(fdt, -1, drv->match_table, &match);
+		if (noff < 0)
+			continue;
+
+		if (drv->init) {
+			rc = drv->init(fdt, noff, match);
+			if (rc)
+				return rc;
+		}
+		current_driver = drv;
+		break;
+	}
+
+	return 0;
+}
+#+end_src
+
+
+*** sbi_hart_init
+
+*** sbi_console_init
+
+#+begin_src c
+
+int sbi_console_init(struct sbi_scratch *scratch)
+{
+	console_plat = sbi_platform_ptr(scratch);
+
+	return sbi_platform_console_init(console_plat);
+}
+
+static inline int sbi_platform_console_init(const struct sbi_platform *plat)
+{
+	if (plat && sbi_platform_ops(plat)->console_init)
+		return sbi_platform_ops(plat)->console_init();
+	return 0;
+}
+
+const struct sbi_platform_operations platform_ops = {
+      //........
+	.console_init		= fdt_serial_init,
+      //........
+};
+
+
+int fdt_serial_init(void)
+{
+	const void *prop;
+	struct fdt_serial *drv;
+	const struct fdt_match *match;
+	int pos, noff = -1, len, coff, rc;
+	void *fdt = sbi_scratch_thishart_arg1_ptr();
+
+	/* Find offset of node pointed by stdout-path */
+	coff = fdt_path_offset(fdt, "/chosen");
+	if (-1 < coff) {
+		prop = fdt_getprop(fdt, coff, "stdout-path", &len);
+		if (prop && len)
+			noff = fdt_path_offset(fdt, prop);
+	}
+
+	/* First check DT node pointed by stdout-path */
+	for (pos = 0; pos < array_size(serial_drivers) && -1 < noff; pos++) {
+		drv = serial_drivers[pos];
+
+		match = fdt_match_node(fdt, noff, drv->match_table);
+		if (!match)
+			continue;
+
+		if (drv->init) {
+			rc = drv->init(fdt, noff, match);
+			if (rc)
+				return rc;
+		}
+		current_driver = drv;
+		break;
+	}
+
+	/* Check if we found desired driver */
+	if (current_driver != &dummy)
+		goto done;
+
+	/* Lastly check all DT nodes */
+	for (pos = 0; pos < array_size(serial_drivers); pos++) {
+		drv = serial_drivers[pos];
+
+		noff = fdt_find_match(fdt, -1, drv->match_table, &match);
+		if (noff < 0)
+			continue;
+
+		if (drv->init) {
+			rc = drv->init(fdt, noff, match);
+			if (rc)
+				return rc;
+		}
+		current_driver = drv;
+		break;
+	}
+
+done:
+	return 0;
+}
+
+static struct fdt_serial *serial_drivers[] = {
+	&fdt_serial_uart8250,
+	&fdt_serial_sifive,
+	&fdt_serial_htif,
+	&fdt_serial_shakti,
+};
+
+static const struct fdt_match serial_uart8250_match[] = {
+	{ .compatible = "ns16550" },
+	{ .compatible = "ns16550a" },
+	{ },
+};
+
+struct fdt_serial fdt_serial_uart8250 = {
+	.match_table = serial_uart8250_match,
+	.init = serial_uart8250_init,
+	.getc = uart8250_getc,
+	.putc = uart8250_putc
+};
+
+#+end_src
+
+
+*** sbi_print_banner
+
+just use console function like uart-putc(). not ecall function.
+
+
+*** sbi_platform_irqchip_init 
+ 
+use platform operation *irqchip_init()*
+#+begin_src c
+
+	.irqchip_init		= fdt_irqchip_init,
+
+int fdt_irqchip_init(bool cold_boot)
+{
+	int rc;
+
+	if (cold_boot) {
+		rc = fdt_irqchip_cold_init();
+		if (rc)
+			return rc;
+	}
+
+	return fdt_irqchip_warm_init();
+}
+
+static int fdt_irqchip_cold_init(void)
+{
+	int pos, noff, rc;
+	struct fdt_irqchip *drv;
+	const struct fdt_match *match;
+	void *fdt = sbi_scratch_thishart_arg1_ptr();
+
+	for (pos = 0; pos < array_size(irqchip_drivers); pos++) {
+		drv = irqchip_drivers[pos];
+
+		noff = -1;
+		while ((noff = fdt_find_match(fdt, noff,
+					drv->match_table, &match)) >= 0) {
+			if (drv->cold_init) {
+				rc = drv->cold_init(fdt, noff, match);
+				if (rc)
+					return rc;
+			}
+			current_driver = drv;
+		}
+
+		if (current_driver)
+			break;
+	}
+
+	return 0;
+}
+
+extern struct fdt_irqchip fdt_irqchip_plic;
+
+static struct fdt_irqchip *irqchip_drivers[] = {
+	&fdt_irqchip_plic
+};
+
+static const struct fdt_match irqchip_plic_match[] = {
+	{ .compatible = "riscv,plic0" },
+	{ .compatible = "sifive,plic-1.0.0" },
+	{ },
+};
+
+struct fdt_irqchip fdt_irqchip_plic = {
+	.match_table = irqchip_plic_match,
+	.cold_init = irqchip_plic_cold_init,
+	.warm_init = irqchip_plic_warm_init,
+	.exit = NULL,
+};
+#+end_src
+
+
+*** sbi_ipi_init
+
+*** sbi_tlb_init 
+
+*** sbi_timer_init
+
+*** sbi_ecall_init
+
+*** sbi_domain_finalize
+
+sbi_domain opensbi-domain
+
+
+*** sbi_hart_pmp_configure
+
+*** sbi_platform_final_init
+
+*** sbi_hart_switch_mode
+
+#+begin_src c
+
+void __attribute__((noreturn))
+sbi_hart_switch_mode(unsigned long arg0, unsigned long arg1,
+		     unsigned long next_addr, unsigned long next_mode,
+		     bool next_virt)
+{
+#if __riscv_xlen == 32
+	unsigned long val, valH;
+#else
+	unsigned long val;
+#endif
+
+	switch (next_mode) {
+	case PRV_M:
+		break;
+	case PRV_S:
+		if (!misa_extension('S'))
+			sbi_hart_hang();
+		break;
+	case PRV_U:
+		if (!misa_extension('U'))
+			sbi_hart_hang();
+		break;
+	default:
+		sbi_hart_hang();
+	}
+
+	val = csr_read(CSR_MSTATUS);
+	val = INSERT_FIELD(val, MSTATUS_MPP, next_mode);
+	val = INSERT_FIELD(val, MSTATUS_MPIE, 0);
+#if __riscv_xlen == 32
+	if (misa_extension('H')) {
+		valH = csr_read(CSR_MSTATUSH);
+		if (next_virt)
+			valH = INSERT_FIELD(valH, MSTATUSH_MPV, 1);
+		else
+			valH = INSERT_FIELD(valH, MSTATUSH_MPV, 0);
+		csr_write(CSR_MSTATUSH, valH);
+	}
+#else
+	if (misa_extension('H')) {
+		if (next_virt)
+			val = INSERT_FIELD(val, MSTATUS_MPV, 1);
+		else
+			val = INSERT_FIELD(val, MSTATUS_MPV, 0);
+	}
+#endif
+	csr_write(CSR_MSTATUS, val);
+	csr_write(CSR_MEPC, next_addr);
+
+	if (next_mode == PRV_S) {
+		csr_write(CSR_STVEC, next_addr);
+		csr_write(CSR_SSCRATCH, 0);
+		csr_write(CSR_SIE, 0);
+		csr_write(CSR_SATP, 0);
+	} else if (next_mode == PRV_U) {
+		if (misa_extension('N')) {
+			csr_write(CSR_UTVEC, next_addr);
+			csr_write(CSR_USCRATCH, 0);
+			csr_write(CSR_UIE, 0);
+		}
+	}
+
+	register unsigned long a0 asm("a0") = arg0;
+	register unsigned long a1 asm("a1") = arg1;
+	__asm__ __volatile__("mret" : : "r"(a0), "r"(a1));
+	__builtin_unreachable();
+}
+#+end_src
+
+** warmboot_init
+* 
