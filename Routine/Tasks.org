@@ -1,7 +1,7 @@
 * Inbox
 * Active
-** TODO Finish opensbi_device_tree
-DEADLINE: <2025-02-21 Fri>
-** TODO Configure emacs for c/c++
-DEADLINE: <2025-02-21 Fri>
+** COMPLETED Finish opensbi_device_tree
+CLOSED: [2025-02-27 Thu 17:37] DEADLINE: <2025-02-21 Fri>
+** COMPLETED Configure emacs for c/c++
+CLOSED: [2025-02-27 Thu 17:37] DEADLINE: <2025-02-21 Fri>
 * Backlog
