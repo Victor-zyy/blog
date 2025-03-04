@@ -4,4 +4,11 @@
 CLOSED: [2025-02-27 Thu 17:37] DEADLINE: <2025-02-21 Fri>
 ** COMPLETED Configure emacs for c/c++
 CLOSED: [2025-02-27 Thu 17:37] DEADLINE: <2025-02-21 Fri>
+** COMPLETED opensbi_from_scratch finish sbi_set time
+CLOSED: [2025-03-03 Mon 11:34] DEADLINE: <2025-02-28 Fri>
+** TODO opensbi trap analyse
+DEADLINE: <2025-02-28 Fri>
+** TODO opensbi uart driver analyse
+DEADLINE: <2025-02-28 Fri>
+
 * Backlog
