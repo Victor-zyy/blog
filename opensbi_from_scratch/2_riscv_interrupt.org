@@ -156,3 +156,125 @@ The whole procedure is just like this,
 
 * interrupt delegation
 
+M-mode timer interrupt delegate to S-mode to handle.
+In the sbi_hart_init function it will call delegate_traps function, which delegate some interrupts and exceptions to S mode to handle when it happens.
+
+interrupts:
+- software interrupt like ipi
+- software timer interrupt
+- software external interrupt
+
+exceptions:
+- load page fault
+- fetch page fault
+- store page fault
+- misaligned fetch
+- breakpoint
+- user ecall( U-mode) system call
+  
+There are some bits in the *medeleg* register. So use csrw instruction to write to them.
+
+#+begin_src c
+
+
+	/* Send M-mode interrupts and most exceptions to S-mode */
+	interrupts = MIP_SSIP | MIP_STIP | MIP_SEIP;
+       
+
+	exceptions = (1U << CAUSE_MISALIGNED_FETCH) | (1U << CAUSE_BREAKPOINT) |
+		     (1U << CAUSE_USER_ECALL);
+	if (sbi_platform_has_mfaults_delegation(plat))
+		exceptions |= (1U << CAUSE_FETCH_PAGE_FAULT) |
+			      (1U << CAUSE_LOAD_PAGE_FAULT) |
+			      (1U << CAUSE_STORE_PAGE_FAULT);
+
+	csr_write(CSR_MIDELEG, interrupts);
+	csr_write(CSR_MEDELEG, exceptions);
+
+#+end_src
+
+Note: by default, interrupt or exceptions all happened to M-mode , namely jumps to *mtvec* interrupt vector table in M-mode, as usual, it handles these cases but not actually handle them , set bit in *mip* to indicate S-mode interrupt or exceptions are pending. As long as the S-mode global interrupt or exception switch is on, the program will jump to S-mode *stvec* register to actually handle them after *mret*.
+
+Let's us show you a S-mode timer interrupt to indicate that.
+in Qemu, a rtc timer is in Clint peripheral, so we need to add a device in qemu-board, and add a device-tree node to parse that. The timer ticks every 100ns, which frequency is 10MHz, it is in ok state by default.
+
+in s-mode timer init. 
+Firstly i need to declare that we have two registers like mtime and mtimecmp, when the mtime is greater than mtime it will trigger an interrupt in M-mode. That's why we need to set the mtimecmp value first. Also, the mtime and mtimecmp registers are in M-mode, so we use ecall to handle this. Actually in S-mode, the rdtime will trigger an exception and read mtime, but qemu doesn't achieve this, it will immediately return a value of mtime.
+
+#+begin_src c
+
+static unsigned long get_ticks()
+{
+	unsigned long n;
+	__asm__ __volatile__("rdtime %0" : "=r"(n));
+	return n;
+}
+void reset_timer()
+{
+  /* set mtimecmp for about 1s + mtime */
+  sbi_ecall_set_time(get_ticks() + TIME_SECOND_TICKS);
+  /* enable interrupt */
+  csr_set(CSR_SIE, MIP_STIP);
+  /* enable global interrupt */
+  csr_set(CSR_SSTATUS, SSTATUS_SIE);
+
+}
+
+#+end_src
+
+
+After the interrupt happens
+#+begin_src c
+_trap_handler
++->sbi_trap_handler
+   +->sbi_timer_process
+
+   
+void sbi_timer_process(void)
+{
+	csr_clear(CSR_MIE, MIP_MTIP); // clear the interrupt enable bit for m-mode timer interrupt
+	csr_set(CSR_MIP, MIP_STIP); // delegate to S-mode timer interrupt
+}
+
+#+end_src
+
+
+After *mret* instruction, the program will jump into smode trap handler table to run.
+
+#+begin_src asm
+
+	/* Set the entry of S mode vector handler */
+	.section .entry, "ax", %progbits
+	.align 2 // must align 4bytes boundry
+	.global _do_exception_vector_s
+_do_exception_vector_s:
+	exception_entry
+
+	la 	ra, ret_from_exception
+	mv	a0, sp
+	mv	a1, s4
+	tail	do_exception_s
+
+ret_from_exception:
+	exception_exit
+	sret
+
+#+end_src
+
+Both routines are the same in practical but a little different.The stack is like this,
+[[./img/2_smode_stack.png]]
+
+And the do_exception_s (a c function) will do the actually timer_handler. 
+#+begin_src c
+
++->do_exception_s
+  +->timer_irq_process
+
+void timer_irq_process(){
+  csr_clear(CSR_SIE, MIP_STIP);
+  jtime++;
+  reset_timer();
+}
+#+end_src
+
+The most important thing is, in sbi_timer_process, it will erase the MIE bit of MTIP, but in reset timer it will enable it though.(which bothers me a lot).
