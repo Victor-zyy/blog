@@ -1,0 +1,75 @@
+* SMP-Core Boot-Up
+
+the device_tree of soc for two cores, actually the *reg* attribute matters.
+#+begin_src dts
+
+    cpu0: cpu@0{
+            reg = <0x0>;
+            device_type = "cpu";
+            compatible = "riscv";
+
+            inc0:interrupt-controller{
+                    phandle=<0x1>;
+                    #interrupt-cells=<0x1>;
+                    interrupt-controllers;
+                    compatible="riscv,cpu-intc";
+            };
+    };
+
+    cpu1: cpu@1{
+            reg = <0x1>;/* FIXME: what does it mean? */
+            device_type = "cpu";
+            compatible = "riscv";
+
+            inc1:interrupt-controller{
+                    phandle=<0x2>;
+                    #interrupt-cells=<0x1>;
+                    interrupt-controllers;
+                    compatible="riscv,cpu-intc";
+            };
+    };
+    clint: clint@2000000 {
+            // format <phandle> <prop-encoded-array>
+            interrupts-extended = <&inc0 0x3>, <&inc0 0x7>, <&inc1 0x3>, <&inc1 0x7>;
+            reg = <0x0 0x2000000 0x0 0x10000>;
+            compatible = "riscv,clint0";
+    };
+
+#+end_src
+I get two rv64-cores to boot up in qemu, when I run opensbi from scratch, the core0 cold boot is already running in S-mode, But the core1 is stuck in the *sbi_hsm_init*. The function name is about opensbi hart state management unit. To wake up the core1, we need ipi mechanism to do it.
+
+#+begin_src c
++->sbi_init
+ +->init_warmboot
+  +->sbi_hsm_init
+   +->sbi_hsm_hart_wait(warm boot)
+
+static void sbi_hsm_hart_wait(struct sbi_scratch *scratch, u32 hartid)
+{
+	unsigned long saved_mie;
+	const struct sbi_platform *plat = sbi_platform_ptr(scratch);
+	struct sbi_hsm_data *hdata = sbi_scratch_offset_ptr(scratch,
+							    hart_data_offset);
+	/* Save MIE CSR */
+	saved_mie = csr_read(CSR_MIE);
+
+	/* Set MSIE bit to receive IPI */
+	csr_set(CSR_MIE, MIP_MSIP);
+
+	/* Wait for hart_add call*/
+	while (atomic_read(&hdata->state) != SBI_HART_STARTING) {
+		wfi();
+	};
+
+	/* Restore MIE CSR */
+	csr_write(CSR_MIE, saved_mie);
+
+	/* Clear current HART IPI */
+	sbi_platform_ipi_clear(plat, hartid);
+}
+
+#+end_src
+
+* SBI IPI mechanism
+
+Now, I am gonna use ipi to wake the core1 up by core0.
