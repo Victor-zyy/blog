@@ -73,3 +73,252 @@ static void sbi_hsm_hart_wait(struct sbi_scratch *scratch, u32 hartid)
 * SBI IPI mechanism
 
 Now, I am gonna use ipi to wake the core1 up by core0.
+
+in S-mode,  test_main, after 10s we bootstrap the core1 use sbi_ecall funciton.
+
+#+begin_src c
++->sbi_ecall
+ +->sbi_hsm_hart_start
+  +->sbi_platform_ipi_send
+   +->sbi_platform_ops(plat)->ipi_send(target_hart);
+    +->fdt_ipi_send
+     +->current_driver->send() // clint
+      +->clint_ipi_send
+
+#+end_src
+
+After that, the core1 is in pending state as long as we check the *mip* bit. However, the spec says,
+#+begin_center
+When a hart is executing in privilege mode x, interrupts are globally enabled when xIE=1 and
+globally disabled when xIE=0. Interrupts for lower-privilege modes, w<x, are always globally
+disabled regardless of the setting of any global wIE bit for the lower-privilege mode. Interrupts for
+higher-privilege modes, y>x, are always globally enabled regardless of the setting of the global yIE
+bit for the higher-privilege mode. Higher-privilege-level code can use separate per-interrupt enable
+bits to disable selected higher-privilege-mode interrupts before ceding control to a lower-privilege
+mode.
+#+end_center
+That is to say, in M-mode if we don't enable the global bit in *MIE*, the core won't trap into the handler pointed by *mtvec register*. But anyway, the core1 use wfi instruction wait for interrupt, even if the pending interrupt is ok. It will resume after receive the ipi.
+
+#+begin_src c
+
+/* Wait for hart_add call*/
+while (atomic_read(&hdata->state) != SBI_HART_STARTING) {
+   wfi();
+};
+
+#+end_src
+
+The way we use ecall function is like that.
+#+begin_src c
+// SBI_EXT_HSM
+// regs->a0 hartid
+// rges->a1 saddr
+// rges->a2 priv
+SBI_ECALL(SBI_EXT_HSM, SBI_EXT_HSM_HART_START, 1, 0x80400000, 1); 
+#+end_src
+* IPI send message
+
+I am gonna use ipi mechanism to send data to core1 by core0.
+
+** step for modify
+1.add ipi_op_event 
+
+the event has three callback operations.
+Before IPI is triggered: update callback
+After IPI is triggered: sync and process
+Note:process callback is mandatory
+
+2.add another sbi_ecall for ipi_send_message
+In this way we need to add function id like, 
+
+#+begin_src c
+/* FIXME: add sbi_msg send */
+#define SBI_EXT_IPI_SEND_MSG_IPI		0xf
+#+end_src
+
+
+3. add another ecall for get msg if ipi is triggered
+
+#+begin_src c
+#define SBI_EXT_BASE_GET_MSG			0x7
+#+end_src
+
+4. in start up of sbi_ipi_init
+
+#+begin_src c
++->sbi_init
+ +->init_warmboot
+  +->sbi_ipi_init
+   +->allocate msg space for each hart in scratch space
+
+ipi_msg_off = sbi_scratch_alloc_offset(IPI_MSG_SIZE,
+		// add-my code for ipi_send_message
+		ret = sbi_ipi_event_create(&ipi_msg_ops);
+		if(ret < 0)
+		        return ret;
+		ipi_smode_msg_event = ret;
+
+#+end_src
+
+#+begin_src c
+/** IPI event operations or callbacks */
+struct sbi_ipi_event_ops {
+	/** Name of the IPI event operations */
+	char name[32];
+
+	/**
+	 * Update callback to save/enqueue data for remote HART
+	 * Note: This is an optional callback and it is called just before
+	 * triggering IPI to remote HART.
+	 */
+	int (* update)(struct sbi_scratch *scratch,
+			struct sbi_scratch *remote_scratch,
+			u32 remote_hartid, void *data);
+
+	/**
+	 * Sync callback to wait for remote HART
+	 * Note: This is an optional callback and it is called just after
+	 * triggering IPI to remote HART.
+	 */
+	void (* sync)(struct sbi_scratch *scratch);
+
+	/**
+	 * Process callback to handle IPI event
+	 * Note: This is a mandatory callback and it is called on the
+	 * remote HART after IPI is triggered.
+	 */
+	void (* process)(struct sbi_scratch *scratch);
+};
+#+end_src
+
+** Procedure of two sbi_ecall 
+
+sbi_ecall_ipi_send_msg
+
+#+begin_src c
+
++->_trap_hander  
+ +->sbi_ecall_handler
+  +->sbi_ecall_ipi_handler
+   +->sbi_ipi_send_msg(hartmsk, hartbase, msg_addr)
+    +->sbi_ipi_send_many(hmask, hbase, ipi_smode_msg_event, data);
+     +->sbi_ipi_send
+      +->sbi_ipi_update_msg
+       +->sbi_platform_ipi_send [ clint send ipi ]
+     
+#+end_src
+
+sbi_ecall_base_get_msg
+
+#+begin_src c
+
++->_trap_hander  
+ +->sbi_ipi_process
+  +->sbi_ipi_process_msg // do nothing
+
++->_trap_handler
+ +->sbi_ecall_handler
+  +->sbi_ecall_base_handler
+
+	case SBI_EXT_BASE_GET_MSG:
+	       scratch = sbi_scratch_thishart_ptr();
+	       data = sbi_scratch_offset_ptr(scratch, ipi_msg_off);
+	       sbi_memcpy((void *)regs->a2, data, sbi_strlen(data) + 1);
+	       break;
+
+#+end_src
+
+** Core 0 program
+
+#+begin_src c
+
+char src_str[64] = "hello, this is core0\n";
+while (1){
+    wfi();
+    if(jtime < 20){
+    mini_printf("\nTest timer interrupt : %d!\n", jtime);
+    }
+
+    if(jtime == 10){ // 10s hsm wake the core 1 up
+    // SBI_EXT_HSM
+    // regs->a0 hartid
+    // rges->a1 saddr
+    // rges->a2 priv
+    SBI_ECALL(SBI_EXT_HSM, SBI_EXT_HSM_HART_START, 1, 0x80400000, 1); 
+    }
+
+    if(jtime == 20){
+    // regs->a0 hmask 0x10
+    // reg->a1 hbase
+    SBI_ECALL(SBI_EXT_IPI, SBI_EXT_IPI_SEND_MSG_IPI, 2, 0, (unsigned long)src_str);
+    }
+}
+#+end_src
+
+** Core 1 program
+
+#+begin_src c
+
+int core1_main(){
+  // enable ipi interrupt
+  csr_set(CSR_SIE, MIP_SSIP);
+  // global status for interrupt
+  csr_set(CSR_SSTATUS, SSTATUS_SIE);
+  char dst[64];
+  while(1){
+    wfi();
+    SBI_ECALL(SBI_EXT_BASE, SBI_EXT_BASE_GET_MSG, 0, 0, (unsigned long)dst);
+    mini_printf("recv from core0: %s\n", dst);
+  }
+  return 0;
+}
+#+end_src
+
+And The result of this lab is,
+[[./img/3_sbi_ipi_successfully.png]]
+
+After 10s core0 use ipi to wake up core1, and after 20s the core0 send msg to core1 by ipi. From the result we can see that the core0 successfully sent the msg and the core1 successfully received that.
+
+
+* Bugs 
+** wfi wait for interrupt
+
+in M-mode use WFI, if we don't enable the global bit of the Mstatus for interrupt, the pending interrupt still works. However we don't actually goes into the _trap_handler pointed by mtvec.
+But in S-mode we use WFI, we actually goes into _trap_handler in M-mode.
+In the manual, it says.
+#+begin_center
+When a hart is executing in privilege mode x, interrupts are globally enabled when xIE=1 and
+globally disabled when xIE=0. Interrupts for lower-privilege modes, w<x, are always globally
+disabled regardless of the setting of any global wIE bit for the lower-privilege mode. Interrupts for
+higher-privilege modes, y>x, are always globally enabled regardless of the setting of the global yIE
+bit for the higher-privilege mode. Higher-privilege-level code can use separate per-interrupt enable
+bits to disable selected higher-privilege-mode interrupts before ceding control to a lower-privilege
+mode.
+#+end_center
+
+** array on stack
+
+As we all know the basic meaning of .data and .bss section for which vars are put. If we define a char str[64] in a function, it will allocate space on the stack when diving into this function.
+
+I met a bug when I define a char arrays in a main function with initialized string, and when the complier linkings, it will implicitly call memset and memcpy to do this initialization.
+
+#+begin_src c
+void test_main(unsigned long a0, unsigned long a1)
+{
+	char src_str[64] = "hello, this is core0\n"; // error undefined memset
+	while (1){
+
+	  wfi();
+	}
+}
+#+end_src
+
+I know the "hello, this is core0\n" string is in .rodata section, when the array allocated on the stack it will initialized, but it can use sd or ld instruction to do this instead of using memset and memcpy, I know inline funciton will increase the performance but still wanna use load and store instructions.
+
+Is there any ideas to avoid this? Actually i tried -ffreestanding -fno-builtin and .etc solutions found on stackoverflow, but it won't work.
+
+Solutions:
+1. define a global char array
+2. use malloc
+3. use const char *
+
