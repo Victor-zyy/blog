@@ -1,0 +1,125 @@
+* Big three
+why we need big there, and what conditions do we need big three? 
+The class contains pointer must include these three functions.
+Note: if we don't write copy ctor ,copy op= and dtor, the compiler will generate automatically.
+For copy ctor it will copy bit by bit directly.
+For dtor it will do nothing.
+- copy ctor
+- copy op= (copy assignment function)
+- dtor (destructor function)
+
+String Class with pointer.
+** String Class
+#+begin_src c++
+class String
+{
+
+};
+
+String::function ...
+
+Global-function
+
+int main(){
+  String s1();
+  String s2("hello");
+
+  String s3(s1); // copy ctor
+  cout << s3 << endl;
+  s3 = s2;   // copy op=
+  
+  cout << s3 << endl;
+}
+#+end_src
+
+** String Class Outline
+#+begin_src c++
+class String
+{
+public:
+  String (const char* cstr = 0);
+  String (const String& str);
+  String& operator=(const String& str);
+  
+  ~String();
+  char *get_c_str() const { return m_data; }
+
+private:
+  char *m_data;
+}
+#+end_src
+
+** ctor
+The string has two formats like, one is lens + string, another one is string end with *'\0'*. C and C++ choose the latter.
+#+begin_src c++
+inline
+String::String(const char* cstr = 0)
+{
+  if(cstr){
+    m_data = new char[ strlen(cstr) + 1 ];
+    strcpy(m_data, cstr);
+  }else{
+    m_data = new char[1];
+    *m_data = '\0';
+  }
+
+}
+
+inline 
+String::~String()
+{
+  delete [] m_data;
+}
+#+end_src
+
+** copy op=
+If we don't provide a deep copy function of copy assignment, the compiler will generate a shadow copy version, which will causes memory leak in the future.
+
+I will show you a img to illustrate this danger.
+[[./img/4_copy_op=.png]]
+
+And the alias in c++ is dangerous.
+
+#+begin_src c++
+inline String&
+String::operator =(const String& str)
+{
+// check self assignment
+  if(this == &str)
+    return *this;
+    
+  delete[] m_data;
+  m_data = new char [strlen(str.m_data) +  1];
+  strcpy(m_data, str.m_data);
+  return *this;
+}
+
+//
+String s1("hello");
+String s2(s1);
+s2 = s1;
+#+end_src
+
+Don't forget self assignment check, it will cause undefined error when you don't.
+
+[[./img/4_copy_op=_self_check.png]]
+
+After deletion, the strcpy will access the memory which just deleted, will cause UB( undefined behavior).
+
+** copy ctor
+Note: brothers between each are friends, so it can access private data like str.m_data.
+#+begin_src c++
+inline 
+String::String (const String & str)
+{
+  m_data = new char[ strlen(str.m_data) + 1 ];
+  strcpy(m_data, str.m_data);
+}
+
+{
+  String s1("hello");
+  String s2(s1);
+//String s2 = s1; has the same meaning of String s2(s1);
+
+}
+#+end_src

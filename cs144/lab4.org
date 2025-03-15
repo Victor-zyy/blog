@@ -1,0 +1,50 @@
+* Glue of CS144TCPSocket
+* UnderStand Whole 
+:: scope operator
+
+::close function when in function close
+
+** Shell script command and symbol
+
+*** shift built-in command
+shift is a bash built-in which kind of removes arguments from the beginning of the argument list. Given that the 3 arguments provided to the script are available in $1, $2, $3, then a call to shift will make $2 the new $1. A shift 2 will shift by two making new $1 the old $3. For more information, see here:
+
+*** $#
+refer to `The value of the total number of command line arguments passed.`
+*** $0
+*** $@
+In brief, $@ expands to the arguments passed from the caller to a function or a script. Its meaning is context-dependent: Inside a function, it expands to the arguments passed to such function. If used in a script (outside a function), it expands to the arguments passed to such script.
+
+*** set 
+--
+  --  Assign any remaining arguments to the positional parameters.
+      If there are no remaining arguments, the positional parameters
+      are unset.
+
+
+* tun/tap
+
+#+begin_src sh
+
+TUN_IP_PREFIX=169.254
+local TUNNUM="$1" TUNDEV="tun$1"
+ip tuntap add mode tun user "${SUDO_USER}" name "${TUNDEV}"
+ip addr add "${TUN_IP_PREFIX}.${TUNNUM}.1/24" dev "${TUNDEV}"
+ip link set dev "${TUNDEV}" up
+ip route change "${TUN_IP_PREFIX}.${TUNNUM}.0/24" dev "${TUNDEV}" rto_min 10ms
+
+
+# Apply NAT (masquerading) only to traffic from CS144's network devices
+iptables -t nat -A PREROUTING -s ${TUN_IP_PREFIX}.${TUNNUM}.0/24 -j CONNMARK --set-mark ${TUNNUM}
+iptables -t nat -A POSTROUTING -j MASQUERADE -m connmark --mark ${TUNNUM}
+echo 1 > /proc/sys/net/ipv4/ip_forward
+
+ip tuntap add mode tun user zyy name tun144
+ip addr add 169.254.144.1/24 dev tun144
+ip link set dev tun144 up
+ip route change 169.254.144.0/24 dev tun144 rto_min 10ms
+# Apply NAT (masquerading) only to traffic from CS144's network devices
+iptables -t nat -A PREROUTING -s 169.254.144.0/24 -j CONNMARK --set-mark 144
+iptables -t nat -A POSTROUTING -j MASQUERADE -m connmark --mark 144
+echo 1 > /proc/sys/net/ipv4/ip_forward
+#+end_src

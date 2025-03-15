@@ -279,7 +279,6 @@ And The result of this lab is,
 
 After 10s core0 use ipi to wake up core1, and after 20s the core0 send msg to core1 by ipi. From the result we can see that the core0 successfully sent the msg and the core1 successfully received that.
 
-
 * Bugs 
 ** wfi wait for interrupt
 
