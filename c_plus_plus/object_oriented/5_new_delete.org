@@ -1,0 +1,106 @@
+* stack and heap
+stack memory is used for local object, local var, argument passed, return val.
+heap memory is dynamically allocated using new, this memory is managed by OS.
+
+** life span
+*** heap object
+#+begin_src c++
+{
+  complex *p = new complex(2,1);
+}
+#+end_src
+when the program goes out of the scope, the object pointed by p is still alive but we can't access because the p is local var. In this case, it will cause memory leak.
+
+*** global object
+the whole program
+*** static local object
+the whole program
+
+* new
+new allocate memory firstly and the evoke the ctor.
+- allocate memory ( malloc)
+- convert type
+- ctor
+#+begin_src c++
+complex *pc = new complex(2,1);
+--->
+
+void *mem = operator new (sizeof(complex)); // operator new function is c++ function which will use malloc.
+pc = static_cast<complex*>(mem);
+pc->complex::complex(2,1); // Complex::Complex(pc, 2, 1);// this
+#+end_src
+
+* delete
+call dtor first and then release memory.
+- dtor
+- free memory using free function
+
+#+begin_src c++
+complex *pc = new complex(2,1);
+...
+delete pc;
+
+complex::~complex(pc);// dtor
+operator delete(pc); // operator delete is c++ inside function which will call free to release memory.
+
+complex *ps = new String("hello");
+...
+delete ps;
+     2.
+ps-->|-----|           1.
+     |     |---------->|-------------|
+     |-----|           |hello        |
+                       |-------------|
+         
+#+end_src
+
+step1. will call String::~String() dtor, delete[] m_data, release allocate memory storing hello string.
+step2. will call delete operator  which free(ps) the memory storing pointer to String.
+
+
+* detail of allocated memory in c++
+#+begin_src 
+one element         array
+|-------|     |-------|
+|malloc |     |malloc |
+|cookie |     |cookie |
+|-------|     |-------|
+|       |     | size  |
+|       |     |-------|
+|Complex|     |Complex|
+|       |     |-------|
+|       |     |Complex|
+|-------|     |-------|
+| pad   |     | pad   |
+|-------|     |-------|
+|malloc |     |malloc |
+|cookie |     |cookie |
+|-------|     |-------|
+#+end_src
+
+When you don't use new [] ( new array) and delete [] (delete array) in pair, it will cause memory leak which doesn in your diet.
+
+#+begin_src 
+String *p = new String [3]; |   String *p = new String [3];
+delete[] p;                 |   delete p;
+
+wake up 3 dtor,another one just wake up one time.
+|------|
+|      |---->|------|
+|      |     |      |
+|      |     |      |  
+|      |     |------|
+|------|
+|      |---->|------|
+|      |     |      |
+|      |     |      |
+|      |     |------|
+|------|
+|      |
+|      |---->|------|
+|      |     |      |
+|------|     |      |
+             |------|
+#+end_src
+
+[[./img/5_delete_array.png]]
