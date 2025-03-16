@@ -1,0 +1,144 @@
+* inheritance with virtual function
+** virtual function
+The inheritance with virtual function can make the most of it.
+The member function has three forms classified by *virtual*. And the virtual function needs to be *overriden* by derived class.
+1. non-virtual function (with no virtual identifier)
+2. impure virtual function (with virtual identifier and default definition)
+3. pure virtual (with virtual identifier, = 0)  // fixme
+
+#+begin_src c++
+class Shape
+{
+public:
+  virtual void draw() const = 0; // pure virtual function
+  virtual void error(const std::string & msg); // impure virtual function
+  int objecId() const; // non-virtual function
+};
+
+
+class Rectangle: public Shape{
+
+};
+
+class Ellipse: public Shape{
+
+};
+#+end_src
+
+** Template Method
+Template Method is a design pattern in oop and ood.Example, MFC, application framework.
+It means delay the action until the derived class to override it.
+#+begin_src c++
+//framework
+CDocument::
+OnFileOpen()
+{
+...
+Serialize();
+...
+};
+
+// application
+class CMyDoc: public CDocument
+{
+  virtual Serialize() {...}
+};
+
+// main
+main()
+{
+  CMyDoc myDoc;
+  
+  myDoc.OnFileopen();
+}
+
+CDocument::OnFileOpen(&myDoc);
+->
+this->Serialize() in OnFileOpen
+#+end_src
+
+** inheritance plus composition
+The two forms of this type are listed below.
+Form one:
+[[./img/8_inheritance_composition_form1.png]]
+I will write a piece of code to figure it out that base ctor calls first or component ctor calls first.
+#+begin_src c++
+
+#include <iostream>
+using namespace std;
+
+class Base{
+public:
+  Base() { cout << "Base() ctor" << endl; }
+  ~Base() { cout << "~Base() dtor" << endl; }
+};
+
+class Component
+{
+public:
+  Component() { cout << "Component() ctor" << endl; }
+  ~Component() { cout << "~Component() dtor" << endl; }
+};
+
+class Derived: public Base{
+public:
+  Derived() { cout << "Derived() ctor" << endl; }
+  ~Derived() { cout << "~Derived() dtor" << endl; }
+private:
+  Component b;
+};
+
+
+int main()
+{
+  Derived b;
+  return 0;
+}
+#+end_src
+
+#+begin_comment sh
+output:
+Base() ctor
+Component() ctor
+Derived() ctor
+~Derived() dtor
+~Component() dtor
+~Base() dtor
+#+end_comment
+
+Form two:
+[[./img/8_inheritance_composition_form2.png]]
+The latter ctor and dtor order is clear.
+
+** inheritance plus delegation
+in ppt, or word, we have the same data value but different view of this data. This is called design pattern
+Obsever.
+#+begin_src c++
+class Subject
+{
+  int m_value;
+  vector<Obsever*> m_views;
+public:
+  void attach(Obsever *obs){
+    m_views.push_back(obs);
+  }
+  void set_val(int val){
+    m_value = val;
+    notify;
+  }
+  void notify(){
+    for(int i = 0; i < m_views.size(); i++)
+      m_views[i]->update(this, m_value);
+  }
+};
+
+
+class Obsever
+{
+public:
+  virtual void update(Subject *sub, int value) = 0;
+};
+#+end_src
+
+The outline of this is like,
+[[./img/8_inheritance_delegation.png]]

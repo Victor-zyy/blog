@@ -57,7 +57,6 @@ ps-->|-----|           1.
 step1. will call String::~String() dtor, delete[] m_data, release allocate memory storing hello string.
 step2. will call delete operator  which free(ps) the memory storing pointer to String.
 
-
 * detail of allocated memory in c++
 #+begin_src 
 one element         array

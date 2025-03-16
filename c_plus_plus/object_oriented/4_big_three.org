@@ -123,3 +123,14 @@ String::String (const String & str)
 
 }
 #+end_src
+** output
+#+begin_src c++
+#include <iostream>
+ostream& operator<<(ostream& os, const String& s)
+{
+  return os << s.get_c_str();
+}
+
+String s1("hello");
+cout << s1;
+#+end_src
