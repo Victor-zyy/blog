@@ -1,0 +1,34 @@
+* PMA and PMP
+Physical Memory Attribute and Physical memory Protection
+
+* opensbi domain
+
+domain mem region supported by PMP in each Core
+
+[[./img/4_SMP.png]]
+
+#+begin_src c
+in warmboot and coldboot
+
++->sbi_init
+ +->init_coldboot
+  +->sbi_domain_finalize
+  +->sbi_hart_pmp_configure
+ 
+coldboot
+
++->sbi_init
+ +->init_warmboot
+  +->sbi_hart_pmp_configure
+
+#+end_src
+
+Let's see what will happen in sbi_domain_finalize
+
+#+begin_src c
++->sbi_domain_finalize
+ +->sbi_platform_domains_init
+  +->platform_domains_init
+   +->fdt_domains_populate
+    +->fdt_iterate_each_domain
+#+end_src

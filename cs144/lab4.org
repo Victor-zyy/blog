@@ -21,7 +21,6 @@ In brief, $@ expands to the arguments passed from the caller to a function or a 
       If there are no remaining arguments, the positional parameters
       are unset.
 
-
 * tun/tap
 
 #+begin_src sh
@@ -47,4 +46,68 @@ ip route change 169.254.144.0/24 dev tun144 rto_min 10ms
 iptables -t nat -A PREROUTING -s 169.254.144.0/24 -j CONNMARK --set-mark 144
 iptables -t nat -A POSTROUTING -j MASQUERADE -m connmark --mark 144
 echo 1 > /proc/sys/net/ipv4/ip_forward
+#+end_src
+
+network address
+host address
+169.254.144.0/24  network address
+
+169.254.144.255/24 broadcast address
+
+169.254.144.1/24 host address
+
+route table show
+#+begin_src sh
+$ip route show
+
+default via 10.198.255.254 dev wlp1s0 proto dhcp metric 600 
+10.198.0.0/16 dev wlp1s0 proto kernel scope link src 10.198.129.197 metric 600 
+169.254.0.0/16 dev virbr0 scope link metric 1000 linkdown 
+169.254.144.0/24 dev tun144 scope link linkdown rto_min lock 10ms 
+169.254.144.0/24 dev tun144 proto kernel scope link src 169.254.144.1 linkdown 
+169.254.145.0/24 dev tun145 scope link linkdown rto_min lock 10ms 
+192.168.122.0/24 dev virbr0 proto kernel scope link src 192.168.122.1 linkdown
+
+$route -n
+Kernel IP routing table
+Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
+0.0.0.0         10.198.255.254  0.0.0.0         UG    600    0        0 wlp1s0
+10.198.0.0      0.0.0.0         255.255.0.0     U     600    0        0 wlp1s0
+169.254.0.0     0.0.0.0         255.255.0.0     U     1000   0        0 virbr0
+169.254.144.0   0.0.0.0         255.255.255.0   U     0      0        0 tun144
+169.254.144.0   0.0.0.0         255.255.255.0   U     0      0        0 tun144
+169.254.145.0   0.0.0.0         255.255.255.0   U     0      0        0 tun145
+192.168.122.0   0.0.0.0         255.255.255.0   U     0      0        0 virbr0
+
+#+end_src
+
+default getway, set all host bit to 1 except the last bit.
+
+169.254.144.254/24 default getway
+
+NAT (Network Address Translation)
+#+begin_src sh
+zyy@ubuntu:~$ sudo iptables -t nat -L
+Chain PREROUTING (policy ACCEPT)
+target     prot opt source               destination         
+CONNMARK   all  --  169.254.144.0/24     anywhere             CONNMARK set 0x90
+
+Chain INPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain OUTPUT (policy ACCEPT)
+target     prot opt source               destination         
+
+Chain POSTROUTING (policy ACCEPT)
+target     prot opt source               destination         
+LIBVIRT_PRT  all  --  anywhere             anywhere            
+MASQUERADE  all  --  anywhere             anywhere             connmark match  0x90
+
+Chain LIBVIRT_PRT (1 references)
+target     prot opt source               destination         
+RETURN     all  --  192.168.122.0/24     base-address.mcast.net/24 
+RETURN     all  --  192.168.122.0/24     255.255.255.255     
+MASQUERADE  tcp  --  192.168.122.0/24    !192.168.122.0/24     masq ports: 1024-65535
+MASQUERADE  udp  --  192.168.122.0/24    !192.168.122.0/24     masq ports: 1024-65535
+MASQUERADE  all  --  192.168.122.0/24    !192.168.122.0/24 
 #+end_src
