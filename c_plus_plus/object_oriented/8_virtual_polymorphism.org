@@ -143,7 +143,6 @@ public:
 The outline of this is like,
 [[./img/8_inheritance_delegation.png]]
 
-
 * design pattern
 inheritance plus delegation
 Example-Prototype

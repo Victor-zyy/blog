@@ -1,3 +1,9 @@
+#+TITLE: cs144-lab2
+#+DATE: 2025-03-22 20:11:59 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: net
+#+HUGO_TAGS: cs144 c++
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
 * Outline of TCPreceiver
 
 From the lab0, and lab1 we have implemented the ByteStream and Reassembler, in this lab2, I am gonna implement TCPreceiver. 
@@ -52,7 +58,7 @@ However, is it enough? TCP is a flow-control protocol, the practical recv messag
 * Implemention of Class
 
 In this lab2, the outline of the TCP receiver is like,
-[[./img/lab2_tcp_class_outline.png]]
+[[file:./static/cs144/images/lab2_tcp_class_outline.png]]
 *Note*: rule of TCP reply to any nonempty message.(which i haven't noticed that until i implented the class of tcp receiver).
 
 ** end of stream
@@ -98,7 +104,7 @@ This is three way handshake of TCP(SYN+SYN-ACK+ACK).
 * Wrap and Unwrap
 
 From above, we know seqno is 32bit which will wrap around, for the UINT32_MAX is limited in network transmition. So we need to transfrom index from one to another.Here is the index table which represents the relationship between all of them.
-[[./img/lab2_wrap.png]]
+[[file:./static/cs144/images/lab2_wrap.png]]
 
 Wrap implemention like this.
 #+begin_src c++
@@ -180,4 +186,4 @@ Last but not least,  Window size is 16 bits, when the capacity of bytestream is 
 
 
 Finally,  successfully passed the tests.
-[[./img/lab2_successfully_pass.png]]
+[[file:./static/cs144/images/lab2_successfully_pass.png]]

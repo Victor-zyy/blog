@@ -1,0 +1,205 @@
+* Github + Hugo = Blog
+** prerequisite
+*** git 
+#+begin_src sh
+zyy@ubuntu:~$ git --version 
+git version 2.34.1
+#+end_src
+*** go 
+#+begin_src sh
+zyy@ubuntu:~$ sudo apt install gccgo-go
+zyy@ubuntu:~$ go version
+go version go1.16.5 gccgo (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0 linux/amd64
+#+end_src
+*** Hugo
+#+begin_comment
+Hugo is available in three editions: standard, extended, and extended/deploy. While the standard edition provides core functionality, the extended and extended/deploy editions offer advanced features.
+Unless your specific deployment needs require the extended/deploy edition, we recommend the extended edition.
+#+end_comment
+There are some prerequisites to prepare for when I install Hugo.
+- Git
+- Go
+- Dart Sass
+#+begin_src shell
+zyy@ubuntu:~$ sudo tar -xvzf ~/Downloads/dart-sass-1.86.0-linux-x64.tar.gz -C /opt/
+dart-sass/src/LICENSE
+dart-sass/src/dart
+dart-sass/src/sass.snapshot
+dart-sass/sass
+add to .bashrc file
+export PATH=$PATH:/opt/dart-sass
+zyy@ubuntu:~$ source .bashrc
+zyy@ubuntu:~$ sass --version
+1.86.0
+#+end_src
+Derivatives of the Debian distribution of Linux include elementary OS, KDE neon, Linux Lite, Linux Mint, MX Linux, Pop!_OS, Ubuntu, Zorin OS, and others. To install the extended edition of Hugo:
+#+begin_src shell
+zyy@ubuntu:~$ sudo apt install hugo
+hugo v0.92.2+extended linux/amd64 BuildDate=2023-01-31T11:11:57Z VendorInfo=ubuntu:0.92.2-1ubuntu0.1
+GOOS="linux"
+GOARCH="amd64"
+GOVERSION="go1.18.1"
+#+end_src
+** local web point
+#+begin_src shell
+zyy@ubuntu:~$ mkdir www-blog
+zyy@ubuntu:~$ cd www-blog/
+zyy@ubuntu:~/www-blog$ ls
+zyy@ubuntu:~/www-blog$ hugo new site quanxiaoyuanlinux
+Congratulations! Your new Hugo site is created in /home/zyy/www-blog/quanxiaoyuanlinux.
+
+Just a few more steps and you're ready to go:
+
+1. Download a theme into the same-named folder.
+   Choose a theme from https://themes.gohugo.io/ or
+   create your own with the "hugo new theme <THEMENAME>" command.
+2. Perhaps you want to add some content. You can add single files
+   with "hugo new <SECTIONNAME>/<FILENAME>.<FORMAT>".
+3. Start the built-in live server via "hugo server".
+
+Visit https://gohugo.io/ for quickstart guide and full documentation.
+
+zyy@ubuntu:~/www-blog/quanxiaoyuanlinux$ git init
+Initialized empty Git repository in /home/zyy/www-blog/quanxiaoyuanlinux/.git/
+zyy@ubuntu:~/www-blog/quanxiaoyuanlinux$ hugo server 
+Start building sites … 
+hugo v0.92.2+extended linux/amd64 BuildDate=2023-01-31T11:11:57Z VendorInfo=ubuntu:0.92.2-1ubuntu0.1
+WARN 2025/03/20 17:32:30 found no layout file for "HTML" for kind "home": You should create a template file which matches Hugo Layouts Lookup Rules for this combination.
+WARN 2025/03/20 17:32:30 found no layout file for "HTML" for kind "taxonomy": You should create a template file which matches Hugo Layouts Lookup Rules for this combination.
+WARN 2025/03/20 17:32:30 found no layout file for "HTML" for kind "taxonomy": You should create a template file which matches Hugo Layouts Lookup Rules for this combination.
+
+                   | EN  
+-------------------+-----
+  Pages            |  3  
+  Paginator pages  |  0  
+  Non-page files   |  0  
+  Static files     |  0  
+  Processed images |  0  
+  Aliases          |  0  
+  Sitemaps         |  1  
+  Cleaned          |  0  
+
+Built in 2 ms
+Watching for changes in /home/zyy/www-blog/quanxiaoyuanlinux/{archetypes,content,data,layouts,static}
+Watching for config changes in /home/zyy/www-blog/quanxiaoyuanlinux/config.toml
+Environment: "development"
+Serving pages from memory
+Running in Fast Render Mode. For full rebuilds on change: hugo server --disableFastRender
+Web Server is available at http://localhost:1313/ (bind address 127.0.0.1)
+Press Ctrl+C to stop
+#+end_src
+
+#+begin_src 
+http://localhost:1313/
+#+end_src
+
+#+begin_src sh
+zyy@ubuntu:~/www-blog/quanxiaoyuanlinux$ tree -d
+.
+├── archetypes
+├── content
+├── data
+├── layouts
+├── resources
+│   └── _gen
+│       ├── assets
+│       └── images
+├── static
+└── themes
+
+10 directories
+
+#+end_src
+
+#+begin_src shell
+zyy@ubuntu:~/www-blog/quanxiaoyuanlinux$ cd themes/
+zyy@ubuntu:~/www-blog/quanxiaoyuanlinux/themes$ ls
+zyy@ubuntu:~/www-blog/quanxiaoyuanlinux/themes$ git init
+Initialized empty Git repository in /home/zyy/www-blog/quanxiaoyuanlinux/themes/.git/
+zyy@ubuntu:~/www-blog/quanxiaoyuanlinux/themes$ git submodule add https://github.com/CaiJimmy/hugo-theme-stack.git hugo-theme-stack
+Cloning into '/home/zyy/www-blog/quanxiaoyuanlinux/themes/hugo-theme-stack'...
+remote: Enumerating objects: 5281, done.
+remote: Counting objects: 100% (11/11), done.
+remote: Compressing objects: 100% (10/10), done.
+remote: Total 5281 (delta 3), reused 1 (delta 1), pack-reused 5270 (from 2)
+Receiving objects: 100% (5281/5281), 1.27 MiB | 468.00 KiB/s, done.
+Resolving deltas: 100% (3394/3394), done.
+
+#+end_src
+
+copy theme configuration file to home directory
+#+begin_src shell
+zyy@ubuntu:~/www-blog/quanxiaoyuanlinux/themes$ cp hugo-theme-stack/exampleSite/hugo.yaml ../
+zyy@ubuntu:~/www-blog/quanxiaoyuanlinux/themes$ 
+#+end_src
+
+
+#+begin_src sh
+languageCode: en-us
+languageCode: zh-cn
+
+title: Example Site
+title: quanxiaoyuanlinux
+
+DefaultContentLanguage: en
+DefaultContentLanguage: zh-cn
+
+hasCJKLanguage: false
+hasCJKLanguage: true
+comment un-necessary lines of code
+#languages:
+#  en:
+#        languageName: English
+#        title: Example Site
+#        weight: 1
+#        params:
+#            sidebar:
+#                subtitle: Example description
+#    zh-cn:
+#        languageName: 中文
+#        title: 演示站点
+#        weight: 2
+#        params:
+#            sidebar:
+#                subtitle: 演示说明
+#    ar:
+#        languageName: ﻉﺮﺒﻳ
+#        languagedirection: rtl
+#        title: ﻡﻮﻘﻋ ﺖﺟﺮﻴﺒﻳ
+#        weight: 3
+#        params:
+#            sidebar:
+#                subtitle: ﻮﺼﻓ ﺖﺟﺮﻴﺒﻳ
+
+#+end_src
+
+#+begin_src sh
+hugo v0.145.0-666444f0a52132f9fec9f71cf25b441cc6a4f355+extended linux/amd64 BuildDate=2025-02-26T15:41:25Z VendorInfo=snap:0.145.0
+GOOS="linux"
+GOARCH="amd64"
+GOVERSION="go1.24.0"
+github.com/sass/libsass="3.6.6"
+github.com/webmproject/libwebp="v1.3.2"
+github.com/sass/dart-sass/protocol="3.1.0"
+github.com/sass/dart-sass/compiler="1.85.1"
+github.com/sass/dart-sass/implementation="1.85.1"
+zyy@ubuntu:~/www-blog$ hugo new site blaze-linux
+Congratulations! Your new Hugo site was created in /home/zyy/www-blog/blaze-linux.
+
+Just a few more steps...
+
+1. Change the current directory to /home/zyy/www-blog/blaze-linux.
+2. Create or install a theme:
+   - Create a new theme with the command "hugo new theme <THEMENAME>"
+   - Or, install a theme from https://themes.gohugo.io/
+3. Edit hugo.toml, setting the "theme" property to the theme name.
+4. Create new content with the command "hugo new content <SECTIONNAME>/<FILENAME>.<FORMAT>".
+5. Start the embedded web server with the command "hugo server --buildDrafts".
+
+See documentation at https://gohugo.io/.
+zyy@ubuntu:~/www-blog$ 
+
+
+#+end_src
+** Github auto deploy 
+

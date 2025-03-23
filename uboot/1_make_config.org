@@ -1,0 +1,477 @@
+* Makefile
+version of u-boot-2021-07
+** uboot-top-makefile
+#+begin_src sh
+
+Step1. generate .config
+$ make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu-  qemu-riscv64_smode_defconfig
+
+
+#+end_src
+
+** 1. MAKEFLAGS
+
+#+begin_src makefile
+#makeflags appened some flags 
+# o Do not use make's built-in rules and variables
+#   (this increases performance and avoids hard-to-debug behaviour);
+# o Look for make include files relative to root of kernel src
+# CURDIR is current directory
+
+MAKEFLAGS += -rR --include-dir=$(CURDIR)
+
+#+end_src
+
+** 2. include ARCH
+
+*unexport* command don't pass to sub Makefile
+
+#+begin_src makefile
+
+#define HOST_ARCH_AARCH64 0xaa64
+#define HOST_ARCH_ARM 0x00a7
+#define HOST_ARCH_RISCV32 0x5032
+#define HOST_ARCH_RISCV64 0x5064
+#define HOST_ARCH_X86 0x0386
+#define HOST_ARCH_X86_64 0x8664
+include include/host_arch.h
+ifeq ("", "$(CROSS_COMPILE)")
+  MK_ARCH="${shell uname -m}"
+else
+  MK_ARCH="${shell echo $(CROSS_COMPILE) | sed -n 's/^\s*\([^\/]*\/\)*\([^-]*\)-\S*/\2/p'}"
+endif
+unexport HOST_ARCH
+
+
+ifeq ("x86_64", $(MK_ARCH))
+  export HOST_ARCH=$(HOST_ARCH_X86_64)
+else ifneq (,$(findstring $(MK_ARCH), "i386" "i486" "i586" "i686"))
+  export HOST_ARCH=$(HOST_ARCH_X86)
+else ifneq (,$(findstring $(MK_ARCH), "aarch64" "armv8l"))
+  export HOST_ARCH=$(HOST_ARCH_AARCH64)
+else ifneq (,$(findstring $(MK_ARCH), "arm" "armv7" "armv7l"))
+  export HOST_ARCH=$(HOST_ARCH_ARM)
+else ifeq ("riscv32", $(MK_ARCH))
+  export HOST_ARCH=$(HOST_ARCH_RISCV32)
+else ifeq ("riscv64", $(MK_ARCH))
+  export HOST_ARCH=$(HOST_ARCH_RISCV64)
+endif
+undefine MK_ARCH
+
+#+end_src
+
+After that MK_ARCH= riscv64, then HOST_ARCH=0x8664, then undefine MK_ARCH, don't use it.
+
+** 3.  LC_VARIABLE
+#+begin_src makefile
+#GNU grep uses an environment variable named GREP_OPTIONS to define a set of #options that are always applied to every call to grep. This comes in handy #when exported in your .bashrc file to set a “standard” grep environment for #your interactive shell. Here’s an example of a definition of GREP_OPTIONS #that excludes a lot of patterns which you’d very rarely if ever want to #search with grep:
+
+# Avoid funny character set dependencies
+unexport LC_ALL
+LC_COLLATE=C
+LC_NUMERIC=C
+export LC_COLLATE LC_NUMERIC
+
+# Avoid interference with shell env settings
+unexport GREP_OPTIONS
+#+end_src
+** 4. beautify output
+   make V=1 to output fully.
+#+begin_src makefile
+use Makefile origin function to know where the command comes from.
+like: 
+$(origin <variable>)
+return value:
+    default：变量是一个默认的定义，比如 CC 这个变量
+    file：这个变量被定义在Makefile中
+    command line：这个变量是被命令行定义的
+    override：这个变量是被override指示符重新定义过的
+    automatic：一个命令运行中的自动化变量
+
+# To put more focus on warnings, be less verbose as default
+# Use 'make V=1' to see the full commands
+
+ifeq ("$(origin V)", "command line")
+  KBUILD_VERBOSE = $(V)
+endif
+ifndef KBUILD_VERBOSE
+  KBUILD_VERBOSE = 0
+endif
+
+ifeq ($(KBUILD_VERBOSE),1)
+  quiet =
+  Q =
+else
+  quiet=quiet_
+  Q = @
+endif
+
+# If the user is running make -s (silent mode), suppress echoing of
+# commands
+
+ifneq ($(filter 4.%,$(MAKE_VERSION)),)	# make-4
+ifneq ($(filter %s ,$(firstword x$(MAKEFLAGS))),)
+  quiet=silent_
+endif
+else					# make-3.8x
+ifneq ($(filter s% -s%,$(MAKEFLAGS)),)
+  quiet=silent_
+endif
+endif
+
+export quiet Q KBUILD_VERBOSE
+
+#+end_src
+
+** 5. Kbuild
+#+begin_src makefile
+
+# kbuild supports saving output files in a separate directory.
+# To locate output files in a separate directory two syntaxes are supported.
+# In both cases the working directory must be the root of the kernel src.
+# 1) O=
+# Use "make O=dir/to/store/output/files/"
+#
+# 2) Set KBUILD_OUTPUT
+# Set the environment variable KBUILD_OUTPUT to point to the directory
+# where the output files shall be placed.
+# export KBUILD_OUTPUT=dir/to/store/output/files/
+# make
+#
+# The O= assignment takes precedence over the KBUILD_OUTPUT environment
+# variable.
+# KBUILD_SRC is set on invocation of make in OBJ directory
+# KBUILD_SRC is not intended to be used by the regular user (for now)
+ifeq ($(KBUILD_SRC),)
+
+# OK, Make called in directory where kernel src resides
+# Do we want to locate output files in a separate directory?
+ifeq ("$(origin O)", "command line")
+  KBUILD_OUTPUT := $(O)
+endif
+
+# That's our default target when none is given on the command line
+PHONY := _all
+_all:
+
+# Cancel implicit rules on top Makefile
+$(CURDIR)/Makefile Makefile: ;
+
+ifneq ($(KBUILD_OUTPUT),)
+# Invoke a second make in the output directory, passing relevant variables
+# check that the output directory actually exists
+saved-output := $(KBUILD_OUTPUT)
+KBUILD_OUTPUT := $(shell mkdir -p $(KBUILD_OUTPUT) && cd $(KBUILD_OUTPUT) \
+								&& /bin/pwd)
+$(if $(KBUILD_OUTPUT),, \
+     $(error failed to create output directory "$(saved-output)"))
+
+PHONY += $(MAKECMDGOALS) sub-make
+
+$(filter-out _all sub-make $(CURDIR)/Makefile, $(MAKECMDGOALS)) _all: sub-make
+	@:
+
+sub-make: FORCE
+	$(Q)$(MAKE) -C $(KBUILD_OUTPUT) KBUILD_SRC=$(CURDIR) \
+	-f $(CURDIR)/Makefile $(filter-out _all sub-make,$(MAKECMDGOALS))
+
+# Leave processing to above invocation of make
+skip-makefile := 1
+endif # ifneq ($(KBUILD_OUTPUT),)
+endif # ifeq ($(KBUILD_SRC),)
+#+end_src
+
+** 6. skip-makefile 
+The rest of the Makefile is skip-makefile (no *KBUILD_SRC*)
+#+begin_src makefile
+ifeq ($(skip-makefile),)
+.....
+endif	# skip-makefile
+#+end_src
+
+** 7. additional MAKEFLAGS
+#+begin_src makefile
+# Do not print "Entering directory ...",
+# but we want to display it when entering to the output directory
+# so that IDEs/editors are able to understand relative filenames.
+MAKEFLAGS += --no-print-directory
+#+end_src
+
+** 8. code checker
+#+begin_src makefile
+
+# Call a source code checker (by default, "sparse") as part of the
+# C compilation.
+#
+# Use 'make C=1' to enable checking of only re-compiled files.
+# Use 'make C=2' to enable checking of *all* source files, regardless
+# of whether they are re-compiled or not.
+#
+# See the file "doc/sparse.txt" for more details, including
+# where to get the "sparse" utility.
+
+ifeq ("$(origin C)", "command line")
+  KBUILD_CHECKSRC = $(C)
+endif
+ifndef KBUILD_CHECKSRC
+  KBUILD_CHECKSRC = 0
+endif
+
+#+end_src
+
+** 9. external module
+#+begin_src makefile
+# Use make M=dir to specify directory of external module to build
+# Old syntax make ... SUBDIRS=$PWD is still supported
+# Setting the environment variable KBUILD_EXTMOD take precedence
+ifdef SUBDIRS
+  KBUILD_EXTMOD ?= $(SUBDIRS)
+endif
+
+ifeq ("$(origin M)", "command line")
+  KBUILD_EXTMOD := $(M)
+endif
+
+# If building an external module we do not care about the all: rule
+# but instead _all depend on modules
+PHONY += all
+ifeq ($(KBUILD_EXTMOD),)
+_all: all
+else
+_all: modules
+endif
+
+#+end_src
+
+** 10.  srctree
+#+begin_src makefile
+
+ifeq ($(KBUILD_SRC),)
+        # building in the source tree
+        srctree := .
+else
+        ifeq ($(KBUILD_SRC)/,$(dir $(CURDIR)))
+                # building in a subdirectory of the source tree
+                srctree := ..
+        else
+                srctree := $(KBUILD_SRC)
+        endif
+endif
+objtree		:= .
+src		:= $(srctree)
+obj		:= $(objtree)
+
+VPATH		:= $(srctree)$(if $(KBUILD_EXTMOD),:$(KBUILD_EXTMOD))
+
+export srctree objtree VPATH
+# Make sure CDPATH settings don't interfere
+unexport CDPATH
+#+end_src
+
+Actually we don't specify the BUILD_SRC variables, so  the srctree is *.*
+
+** 11. HOSTARCH and HOSTOS
+#+begin_src makefile
+
+HOSTARCH := $(shell uname -m | \
+	sed -e s/i.86/x86/ \
+	    -e s/sun4u/sparc64/ \
+	    -e s/arm.*/arm/ \
+	    -e s/sa110/arm/ \
+	    -e s/ppc64/powerpc/ \
+	    -e s/ppc/powerpc/ \
+	    -e s/macppc/powerpc/\
+	    -e s/sh.*/sh/)
+
+HOSTOS := $(shell uname -s | tr '[:upper:]' '[:lower:]' | \
+	    sed -e 's/\(cygwin\).*/cygwin/')
+
+export	HOSTARCH HOSTOS
+
+#print
+printout:
+HOSTARCH=x86_64
+HOSTOS=linux
+
+
+# set default to nothing for native builds
+ifeq ($(HOSTARCH),$(ARCH))
+CROSS_COMPILE ?=
+endif
+if HOSTARCH equals ARCH do nothing
+
+#+end_src
+
+** 12.kbuild configure
+#+begin_src makefile
+
+KCONFIG_CONFIG	?= .config
+export KCONFIG_CONFIG
+# SHELL used by kbuild
+CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
+	  else if [ -x /bin/bash ]; then echo /bin/bash; \
+	  else echo sh; fi ; fi)
+
+HOST_LFS_CFLAGS := $(shell getconf LFS_CFLAGS 2>/dev/null)
+HOST_LFS_LDFLAGS := $(shell getconf LFS_LDFLAGS 2>/dev/null)
+HOST_LFS_LIBS := $(shell getconf LFS_LIBS 2>/dev/null)
+
+HOSTCC       = cc
+HOSTCXX      = c++
+KBUILD_HOSTCFLAGS   := -Wall -Wstrict-prototypes -O2 -fomit-frame-pointer \
+		$(HOST_LFS_CFLAGS) $(HOSTCFLAGS)
+KBUILD_HOSTCXXFLAGS := -O2 $(HOST_LFS_CFLAGS) $(HOSTCXXFLAGS)
+KBUILD_HOSTLDFLAGS  := $(HOST_LFS_LDFLAGS) $(HOSTLDFLAGS)
+KBUILD_HOSTLDLIBS   := $(HOST_LFS_LIBS) $(HOSTLDLIBS)
+
+# Standard
+# With the move to GCC 6, we have implicitly upgraded our language
+# standard to GNU11 (see https://gcc.gnu.org/gcc-5/porting_to.html).
+# Some Linux distributions (including RHEL7, SLES13, Debian 8) still
+# have older compilers as their default, so we make it explicit for
+# these that our host tools are GNU11 (i.e. C11 w/ GNU extensions).
+CSTD_FLAG := -std=gnu11
+ifeq ($(HOSTOS),linux)
+KBUILD_HOSTCFLAGS += $(CSTD_FLAG)
+endif
+
+ifeq ($(HOSTOS),cygwin)
+KBUILD_HOSTCFLAGS	+= -ansi
+endif
+#+end_src
+
+By default, .config doesn't exist, you need to make xx_defconfig to generate.
+** 13.Kbuild builtin
+#+begin_src makefile
+# Decide whether to build built-in, modular, or both.
+# Normally, just do built-in.
+
+KBUILD_MODULES :=
+KBUILD_BUILTIN := 1
+
+# If we have only "make modules", don't compile built-in objects.
+# When we're building modules with modversions, we need to consider
+# the built-in objects during the descend as well, in order to
+# make sure the checksums are up to date before we record them.
+
+ifeq ($(MAKECMDGOALS),modules)
+  KBUILD_BUILTIN := $(if $(CONFIG_MODVERSIONS),1)
+endif
+
+# If we have "make <whatever> modules", compile modules
+# in addition to whatever we do anyway.
+# Just "make" or "make all" shall build modules as well
+
+# U-Boot does not need modules
+#ifneq ($(filter all _all modules,$(MAKECMDGOALS)),)
+#  KBUILD_MODULES := 1
+#endif
+
+#ifeq ($(MAKECMDGOALS),)
+#  KBUILD_MODULES := 1
+#endif
+
+# Check ths size of a binary:
+# Args:
+#   $1: File to check
+#   #2: Size limit in bytes (decimal or 0xhex)
+define size_check
+	actual=$$( wc -c $1 | awk '{print $$1}'); \
+	limit=$$( printf "%d" $2 ); \
+	if test $$actual -gt $$limit; then \
+		echo "$1 exceeds file size limit:" >&2; \
+		echo "  limit:  $$(printf %#x $$limit) bytes" >&2; \
+		echo "  actual: $$(printf %#x $$actual) bytes" >&2; \
+		echo "  excess: $$(printf %#x $$((actual - limit))) bytes" >&2;\
+		exit 1; \
+	fi
+endef
+export size_check
+
+export KBUILD_MODULES KBUILD_BUILTIN
+export KBUILD_CHECKSRC KBUILD_SRC KBUILD_EXTMOD
+
+#+end_src
+** 14.scripts/Kbuild.include
+#+begin_src makefile
+# We need some generic definitions (do not try to remake the file).
+scripts/Kbuild.include: ;
+include scripts/Kbuild.include
+
+// scripts/Kbuild.include file
+some var definition and var to use
+The significant thing is
+#+end_src
+** 15. build
+
+
+* Make Configuration
+make xxx_defconfig
+** build builtin-command
+#+begin_src makefile
+###
+# Shorthand for $(Q)$(MAKE) -f scripts/Makefile.build obj=
+# Usage:
+# $(Q)$(MAKE) $(build)=dir
+build := -f $(srctree)/scripts/Makefile.build obj
+#+end_src
+** prerequisite
+#+begin_src makefile
+
+%config: scripts_basic outputmakefile FORCE
+	$(Q)$(MAKE) $(build)=scripts/kconfig $@
+
+# Basic helpers built in scripts/
+PHONY += scripts_basic
+scripts_basic:
+	$(Q)$(MAKE) $(build)=scripts/basic
+	$(Q)rm -f .tmp_quiet_recordmcount
+
+# To avoid any implicit rule to kick in, define an empty command.
+scripts/basic/%: scripts_basic ;
+
+
+PHONY += outputmakefile
+# outputmakefile generates a Makefile in the output directory, if using a
+# separate output directory. This allows convenient use of make in the
+# output directory.
+outputmakefile:
+ifneq ($(KBUILD_SRC),)
+	$(Q)ln -fsn $(srctree) source
+	$(Q)$(CONFIG_SHELL) $(srctree)/scripts/mkmakefile \
+	    $(srctree) $(objtree) $(VERSION) $(PATCHLEVEL)
+endif
+#+end_src
+
+
+#+begin_src makefile
+
+version_h := include/generated/version_autogenerated.h
+timestamp_h := include/generated/timestamp_autogenerated.h
+#+end_src
+defaultenv_h := include/generated/defaultenv_autogenerated.h
+dt_h := include/generated/dt.h
+
+no-dot-config-targets := clean clobber mrproper distclean \
+			 help %docs check% coccicheck \
+			 ubootversion backup tests check qcheck tcheck
+
+config-targets := 0
+mixed-targets  := 0
+dot-config     := 1
+
+ifneq ($(filter $(no-dot-config-targets), $(MAKECMDGOALS)),)
+	ifeq ($(filter-out $(no-dot-config-targets), $(MAKECMDGOALS)),)
+		dot-config := 0
+	endif
+endif
+
+ifeq ($(KBUILD_EXTMOD),)
+        ifneq ($(filter config %config,$(MAKECMDGOALS)),)
+                config-targets := 1
+                ifneq ($(words $(MAKECMDGOALS)),1)
+                        mixed-targets := 1
+                endif
+        endif
+endif
+#+end_src

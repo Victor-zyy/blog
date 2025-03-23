@@ -1,3 +1,10 @@
+#+TITLE: cs144-lab3
+#+DATE: 2025-03-22 20:17:19 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: net
+#+HUGO_TAGS: cs144 c++
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
+
 * TCP Sender Class
 
 TCP  Sender Responsibility,
@@ -54,6 +61,6 @@ when use STL library, check the empty first will minus the time you debug. When 
 * Corner Cases
 There are many corner cases to remind of, but i don't wanna metion in this blog post.  Finally after great efforts, I finally succeeded. 
 
-[[./img/lab3_successfully.png]]
+[[file:./static/cs144/images/lab3_successfully.png]]
 
 

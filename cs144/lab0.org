@@ -1,3 +1,9 @@
+#+TITLE: cs144-lab0
+#+DATE: 2025-03-21 15:58:07 +0800>
+#+HUGO_CATEGORIES: net
+#+HUGO_TAGS: cs144 c++
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
+
 * 1 Set up Linux environment
 
   1. ubuntu 22.04
@@ -28,7 +34,7 @@ clang-tidy clang-format gcc-doc pkg-config glibc-doc tcpdump tshark
    - close tells the server you finished the request
    - the last `Enter`tells the server you are done with the HTTP request
 After that the result is as such.
-[[./img/lab0_cs144_web_page_result.png]]
+[[file:./static/cs144/images/lab0_cs144_web_page_result.png]]
 
 ** 2.2 Send yourself an email
     send an email massage using a reliable byte stream to a service running on another computer
@@ -38,21 +44,21 @@ I use 163-netease email to do this job for I am not standford student.These step
 - `telnet smtp.163.com smtp` or `telnet smtp.163.com 25` where port `25` is the smtp server port number
 - Type `HELO hello.victor` `Enter` it will echo `250 OK` the response code number starts with 2xx or 3xx is great to indicate connection is right! But when the response code number is 5xx, it tells you that something was wrong.
 - Type `EHLO hello.victor` it will print it out something you need to do to authentication.
-[[./img/lab0_EHLO_smtp.png]]
+[[file:./static/cs144/images/lab0_EHLO_smtp.png]]
 - After that, you need to login in by type `AUTH LOGIN` , when you do that, you have to type **base64** coded you user name and vertification code.[[https://www.base64decode.org/][base64 converter]] This page will help you to do so, last but no least you have to set you own vertification code in your 163-email website.
 - When authentication is successfully, you are allowed to send an email.
 #+ATTR_HTML: :align center
 #+ATTR_HTML: :width 300px
- [[./img/lab0_result_smtp.png]]
+[[file:./static/cs144/images/lab0_result_smtp.png]]
 
   as you can see from the picture, after authentication, we can send email from byte stream by typing `MAIL FROM:` and `RCPT TO:`, don't forget to add an `<>`around your email address. When you type Data, you have to leave a blank line at the end of the headers. When finished the body, type `Enter`to end this edit. With all things done, type `quit` to end the conversation with the email.
 
 telnet: a client that makes outgoing connection with programs running on other computers. Let's to be a simple server, which is kind of program that waits around for clients to connect it.
 
 ** 2.3 Listening and connecting
-[[./img/lab0_netcat_server.png]]
+[[file:./static/cs144/images/lab0_netcat_server.png]]
 The netcat command `v` to produce more verbose output, and `-l` to listening a port and `-p` to designate port number 9090, the telnet to connect this server, which localhost indicates the same ip address shared each other.
-[[./img/lab0_client_and_server.png]]
+[[file:./static/cs144/images/lab0_client_and_server.png]]
 This picture indicates this communication.
 
 * 3 Writing a network program using an OS stream socket
@@ -71,7 +77,7 @@ this image shows up the inheritance relationship.
 #+ATTR_HTML: :align center
 #+ATTR_HTML: :width 300px
 #+ATTR_ORG: :align center
-[[./img/lab0_webget_inheritance.png]]
+[[file:./static/cs144/images/lab0_webget_inheritance.png]]
 
 ***** FileDescriptor Class
 
@@ -189,11 +195,11 @@ if not just reboot
 The std::string_view class I don't fully understand, so I failed in peek tests. That is a ring buffer is wrapped around when start and end pointers are not equal, and string_view class needs a sequence char in memory. So i fail in the peek tests.
 
 After that, I switch to deque/queue. In this way, I passed 7 tests, but stuck in 8 peek tests, 
-[[./img/lab0_c++_error_heap_overflow.png]]
+[[file:./static/cs144/images/lab0_c++_error_heap_overflow.png]]
 
 it says that heap buffer overflow when I didn't use gdb in eshell. The reason why i got this error is still string_view needs a sequence capture char in memory. And deque/queue implementation is chunks of memory linked, each set of memory is in sequence but not all the items. I use gdb to prove that.
-[[./img/lab0_c++_error_deque.png]]
-[[./img/lab0_c++_deque_2.png]]
+[[file:./static/cs144/images/lab0_c++_error_deque.png]]
+[[file:./static/cs144/images/lab0_c++_deque_2.png]]
 
 From the picture, we can see that the deque has discontinuous memory address the same as queue, that's why I get this error for several days to handle.
 
@@ -239,5 +245,5 @@ error: invalid conversion from ‘const __gnu_cxx::__alloc_traits<std::allocator
 That is because Peek function is a const member function which has no right to change the member value.
 
 After adopting this way, I finally successfully passed the tests, though the speed is not so fast but i give in my efforts. There are a lot of efforts to take to make the code looks great and faster. I will do it in the future.
-[[./img/lab0_c++_successfully.png]]
+[[file:./static/cs144/images/lab0_c++_successfully.png]]
 

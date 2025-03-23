@@ -1,3 +1,10 @@
+#+TITLE: cs144-lab1
+#+DATE: 2025-03-22 19:59:26 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: net
+#+HUGO_TAGS: cs144 c++
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
+
 * Overview 
 ** Course Learn
 
@@ -69,7 +76,7 @@ your Reassember module should handle many corner cases like lost, duplicate, alt
 * Outline of Reassember Class
 
 The whole incoming substring construct format is like this.
-[[./img/lab1_reassember.png]]
+[[file:./static/cs144/images/lab1_reassember.png]]
 
 ** code procedure
 
@@ -110,7 +117,7 @@ And, similarly an duplicated substring which doesn't exceed the first_unassemble
 *** step 2. substrings can be put or assembled
 
 the incoming substring can be like in the picture below.
-[[./img/lab1_string_handle.png]]
+[[file:./static/cs144/images/lab1_string_handle.png]]
 
 if the substring covers the next_index,  we have to put into the Bytestream, if not we have to put into the reassember internal storage. To simplify the reassembler class, i chose *std::unordered_map<uint64_t, std::stirng>* as the internal storage for reassember, that's because we can find and iterate it fast.
 
@@ -159,7 +166,7 @@ Last but not least, I need do some clear in case that while-loop finds nothing t
 Well, strings that put into the map_ might also be merged in some cases, like the string cover the one in map_, or the string can splice with another one in the map_. there are many cases we can think of, but only two conditions can handle these cases. So we need to check which one it is , and if not just insert into the internal storage.
 
 Here are the two conditions.
-[[./img/lab1_conditon_merge.png]]
+[[file:./static/cs144/images/lab1_conditon_merge.png]]
 
 And the code implementation is just like do the left check loop until merged, after that do the same thing as the right loop check. And if the program runs out of the two loop, we can figure it out that this string need not be merged and just put into the map_.
 
@@ -252,4 +259,4 @@ this case demostrates that, the last string has come first. But we don't have to
 
 Lastly, i passed the tests, but the codes i wrote are a little bit clumsy. I will implement and upgrade this class module in the future to make it easy to use.
 
-[[./img/lab1_successfuly.png]]
+[[file:./static/cs144/images/lab1_successfuly.png]]
