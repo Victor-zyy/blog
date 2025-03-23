@@ -87,6 +87,8 @@ The real/imag function will be canditate for inline functions automatically.Btw,
 * Constructor function (ctor)
 ** access level
 public
+protected ( which I don't give it to public interface and differs from private function I can use it)
+protected example in 8_virtual_polymorphism.org file.
 private are not allowed by outside of the class
 #+begin_src c++
 

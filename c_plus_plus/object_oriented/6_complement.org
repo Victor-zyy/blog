@@ -100,7 +100,8 @@ public:
 cout is kind of ostream, and there are many *operator<<* overload function.
 
 * template
-template class  and template function.
+  The template will be compiled successfully, but when called by user, it will be compiled again which might cause error. And the most important thing is operator overload function.
+** template class  
 #+begin_src c++
 template<typename T>
 class complex
@@ -117,6 +118,7 @@ complex<double> c1;
 
 When the compiler sees the Complex<int> or Complex<double> it will generate two slices of Complex has different type. This is kind of wasteful of memory but it's necessary.
 
+** template function
 #+begin_src c++
 stone r1(2,3), r2(2,0), r3;
 r3 = min(r1, r2);
@@ -143,6 +145,8 @@ private:
 #+end_src
 
 The compiler will do *argument deduction* to function template, which we don't have to add <int> or <stone> after the min function. After that, the min function will call the operator < function. So the class designer must overload this function.
+
+And the more details about template is in 3_template.org in object_mode directory
 * namespace
 #+begin_src c++
 namespace std{
@@ -156,3 +160,24 @@ using std::cout;
 Two ways to use it.
 1. using directive (valid all)
 2. using delcaration(valid some case)
+
+Example
+#+begin_src c++
+  namespace jj01
+  {
+    void test_member_template();
+  };
+
+  namespace jj02
+  {
+    void test_member_template();
+  };
+
+  int main()
+  {
+    jj01::test_member_template();
+    jj02::test_member_template();
+  };
+#+end_src
+
+When using namespace with different departments, the conflict disappears which is really cooperative.

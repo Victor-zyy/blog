@@ -1,0 +1,165 @@
+* pointer-like classes
+we say pointer like classes are smart pointers.
+** simple in class
+
+#+begin_src c++
+
+  template<class T>
+  class shared_ptr
+  {
+  public:
+     T& operator*() const { return *px; }
+     T*  operator->() const { return px; }
+     shared_ptr(T* p) : px(p) {}
+  private:
+     T* px;
+     long *pn;
+  };
+
+
+    //usage example
+  struct Foo
+  {
+    ...
+    void method(void) { ... }
+
+  };
+
+  shared_ptr<Foo> sp(new Foo);
+  Foo f(*sp);
+  sp->method();
+  px->method();
+
+#+end_src
+
+I am gonna to clarify that *sp->method*, the sp-> will call the operator-> function, it will return the px pointer but why it will call method function. Note: remember that -> will never disappear when called the operator-> function.
+
+** iterator in STL
+we use linked-list as an example
+#+begin_src c++
+  template<class T>
+  struct __list_node {
+    void *prev;
+    void *next;
+    T data;
+  };
+  template<class T, class Ref, class Ptr>
+  struct __list_iterator {
+    typedef __list_iterator<T, Ref, Ptr> self;
+    typedef Ptr pointer;
+    typedef Ref reference;
+    typedef __list_node<T>* link_type;
+    link_type node;
+    ...
+    reference operator*() const { return (*node).data; }
+    pointer operator->() const { return &(operator*()); }
+  };
+#+end_src
+
+The outline of this iterator is like this.
+[[file:./static/c_plus_plus/images/2_function_like_class.png]]
+
+#+begin_src c++
+  //example
+  list<Foo>::iterator ite;
+  *ite; //get the Foo object
+  ite->method();
+   
+#+end_src
+Let's clarify this example, the user didn't know prev and next, the only know the Foo object, which means that the operator* and operator-> much behaves like linked list Foo object.
+So  ite->method is the same as (*ite).method, and &(*ite)->method
+
+Nomatter how smarter the smart_ptr is , the operator* and operator-> didn't change except for iterator which has to resolve the real object node like Foo object.
+* function-like classes
+** example
+Example:
+#+begin_src c++
+  template <class T1, class T2>
+  struct pair{
+    typedef T1 first_type;
+    typedef T2 second_type;
+    T1 first;
+    T2 second;
+    pair() :first(T1()), second(T2()) {}
+    pair(const T1& a, const T2& b) :first(a), second(b) {}
+
+  };
+  template <class T>
+  struct identiy .. {
+    const T&
+    operator() (const T& x) const { return x; }
+  };
+  template <class Pair>
+  struct select1st .. {
+    const typename Pair::first_type&
+    operator() (const Pair& x) const { return x.first; }
+  };
+
+  template <class Pair>
+  struct select2nd .. {
+    const typename Pair::second_type&
+    operator() (const Pair& x) const { return x.second; }
+  };
+#+end_src
+Note: The Pair is not a type in template quote line, it is just a reminder to let the caller to pass the Pair class.
+Note: typename inside a struct is really a type not a random name.
+They all inherit from unary_function
+#+begin_src c++
+
+  template <class T>
+  struct identiy : public unary_function<T,T> {
+    const T&
+    operator() (const T& x) const { return x; }
+  };
+  template <class Pair>
+  struct select1st : public unary_function<Pair, typename Pair::first_type>{
+    const typename Pair::first_type&
+    operator() (const Pair& x) const { return x.first; }
+  };
+
+  template <class Pair>
+  struct select2nd : public unary_function<Pair, typename Pair::second_type>{
+    const typename Pair::second_type&
+    operator() (const Pair& x) const { return x.second; }
+  };
+#+end_src
+
+** function-like class in STL
+#+begin_src c++
+  template <class T>
+  struct plus : public binary_function<T, T, T> {
+    T operator() (const T& x, const T& y) const { return x + y ; }
+  };
+
+  template <class T>
+  struct minus : public binary_function<T, T, T> {
+    T operator() (const T& x, const T& y) const { return x - y ; }
+  };
+
+  template <class T>
+  struct equal_to : public binary_function<T, T, bool> {
+    bool operator() (const T& x, const T& y) const { return x == y ; }
+  };
+
+  template <class T>
+  struct less : public binary_function<T, T, bool> {
+    bool operator() (const T& x, const T& y) const { return x < y ; }
+  };
+#+end_src
+
+** base class in function like class
+#+begin_src c++
+  template <class Arg, class Result>
+  struct unary_function {
+    typedef Arg argument_type;
+    typedef Result result_type;
+  };
+
+  template <class Arg1, class Arg2, class Result>
+  struct binary_function {
+    typedef Arg1 first_argument_type;
+    typedef Arg2 second_argument_type;
+    typedef Result result_type;
+  };
+#+end_src
+Actually there are only typedefs in the struct, in theory there may be size 0 in memory, but size probably equals to 1.

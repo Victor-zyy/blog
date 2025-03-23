@@ -1,0 +1,104 @@
+* Template
+  The template will be compiled successfully, but when called by user, it will be compiled again which might cause error. And the most important thing is operator overload function.
+** template class  
+#+begin_src c++
+template<typename T>
+class complex
+{
+
+private:
+  T re, ra;
+}
+
+....
+complex<int> c1;
+complex<double> c1;
+#+end_src
+
+When the compiler sees the Complex<int> or Complex<double> it will generate two slices of Complex has different type. This is kind of wasteful of memory but it's necessary.
+
+** template function
+#+begin_src c++
+stone r1(2,3), r2(2,0), r3;
+r3 = min(r1, r2);
+-->
+template <class T>
+inline
+const T& min(const T& a, const T& b)
+{
+  return a < b ? a : b;
+}
+-->
+class stone
+{
+public:
+  ...
+
+  bool operator < (const stone& t2) {
+    return _weight < t2._weight;
+  }
+private:
+  double _weight;
+  double _height;
+};
+#+end_src
+
+The compiler will do *argument deduction* to function template, which we don't have to add <int> or <stone> after the min function. After that, the min function will call the operator < function. So the class designer must overload this function.
+
+** member template
+in a simple way to clarify that a template in template.
+#+begin_src c++
+  template<class T1, class T2>
+  struct pair{
+    typedef T1 first_type;
+    typedef T2 second_type;
+    T1 first;
+    T2 second;
+    pair() :first(T1()), second(T2()) {}
+    pair(const T1& a, const T2& b) :first(a), second(b) {}
+
+    // ctor overload
+    template<class U1, class U2>
+    pair(const pair<U1, U2>& p) : first(p.first), second(p.second) {};
+  };
+#+end_src
+
+Here is an example like we have two types of class and their derived classes. The question is that can we assign to it ?
+
+#+begin_src c++
+  class Base1 {};
+  class Derived1: public Base1{};
+  class Base2 {};
+  class Derived2: public Base2{};
+
+       //T1         T2
+  pair<Derived1, Derived2> p;
+  pair<Base1, Base2> p2(p);
+  
+       //T1         T2        U1        U2
+  pair<Base1, Base2> p2(pair<Derived1, Derived2>());
+#+end_src
+
+ *pair(const pair<U1, U2>& p) : first(p.first), second(p.second) {}* indicates that U1 is assigned to T1 also for U2 and T2.
+Can the assignment succeed or not? 
+Let's use an example in life. The sparrow derived from bird, and sparrow is a bird (inheritance). Fine! From this example we know that derived class can be assigned to base class which means the derived class can be converted to base class. But on the opposite it's not allowed.
+
+The reason in STL using member template is to make the STL more elastic.
+
+** In STL member template
+#+begin_src c++
+  template<typename _Tp>
+  class shared_ptr : public __shared_ptr<_Tp>
+  {
+
+    template<typename _Tp1>
+    explicit shared_ptr(_Tp1 *__p)
+      :__shared_ptr<_Tp>(__p) {}
+  };
+
+  // smart pointer
+  Base *ptr = new Derived1; // up-cast
+  shared_ptr<Base> sptr(new Derived); // simulate up-cast
+#+end_src
+
+Base class pointer can point to Derived class which is easy and rational to understand. So the shared_ptr must have this attribute so member template matters.
