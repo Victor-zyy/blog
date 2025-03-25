@@ -1,0 +1,3 @@
+* start up
+As we know the make procedure in last post, now let's see the start up of the makefile. One way to go through this process is to see the linker file and the _start entry point in the start.S file in arch folder.
+** 

@@ -1,0 +1,42 @@
+* Shell script command and symbol
+** built-in command
+*** shift
+shift is a bash built-in which kind of removes arguments from the beginning of the argument list. Given that the 3 arguments provided to the script are available in $1, $2, $3, then a call to shift will make $2 the new $1. A shift 2 will shift by two making new $1 the old $3. For more information, see here:
+Example:
+#+begin_src shell
+  # check arguments
+  if [ -z "$1" ] || ([ "$1" != "start" ] && [ "$1" != "stop" ] && [ "$1" != "restart" ] && [ "$1" != "check" ]); then
+      show_usage
+  fi
+  MODE=$1; shift
+
+  ubuntu:~$./tun.sh start cs144
+
+#+end_src
+After that MODE=start, and $1=cs144, which means that extract MODE argument .
+
+*** set 
+  *--* operator  Assign any remaining arguments to the positional parameters.
+      If there are no remaining arguments, the positional parameters
+      are unset.
+** special symbol 
+*** $#
+refer to The value of the total number of command line arguments passed.
+Example:
+#+begin_src shell
+  # set default argument
+  if [ "$#" = "0" ]; then
+      set -- 144 145
+  fi
+  echo $1
+  echo $2
+  ubuntu:~$./tun.sh start
+  144
+  145
+#+end_src
+If arguments passed to tun.sh is zero which doesn't include itself, it will set the remaining argument to 144 and 145. That gives $1=144 $2=145.
+*** $N
+$0 shell script itself, when N greater than zero, it is on behalf of each argument passed in the command line.
+*** $@
+In brief, $@ expands to the arguments passed from the caller to a function or a script. Its meaning is context-dependent: Inside a function, it expands to the arguments passed to such function. If used in a script (outside a function), it expands to the arguments passed to such script.
+

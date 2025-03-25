@@ -1,30 +1,19 @@
+#+TITLE: cs144-lab4
+#+DATE: 2025-03-23 15:25:46 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: net
+#+HUGO_TAGS: cs144 c++
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
+
 * Glue of CS144TCPSocket
-* UnderStand Whole 
-:: scope operator
+I will illustrate the glue for using CS144TCPSocket in one image.
+[[file:./static/cs144/images/lab4_cs144_framework.png]]
+From the picture, we know that it's our job to implement TCP/IP in user layer in this class. But how do our packets of network send to other computers through the internet ? The answer is to use tun/tap device under the linux kernel. The tun/tap device is kinda like a software net-card which tun device gives you raw IP packet and tap device gives you raw MAC dataframe. And follow the instructions of the tun.sh, setting the iptables to route makes our packet to go elsewhere.
 
-::close function when in function close
-
-** Shell script command and symbol
-
-*** shift built-in command
-shift is a bash built-in which kind of removes arguments from the beginning of the argument list. Given that the 3 arguments provided to the script are available in $1, $2, $3, then a call to shift will make $2 the new $1. A shift 2 will shift by two making new $1 the old $3. For more information, see here:
-
-*** $#
-refer to `The value of the total number of command line arguments passed.`
-*** $0
-*** $@
-In brief, $@ expands to the arguments passed from the caller to a function or a script. Its meaning is context-dependent: Inside a function, it expands to the arguments passed to such function. If used in a script (outside a function), it expands to the arguments passed to such script.
-
-*** set 
---
-  --  Assign any remaining arguments to the positional parameters.
-      If there are no remaining arguments, the positional parameters
-      are unset.
-
-* tun/tap
-
+Let's see what the tun.sh done in this lab.
+** tun.sh
+The most important part of tun.sh is to create a tun/tap device and set the iproute tables. The snippet of the code is shown below.
 #+begin_src sh
-
 TUN_IP_PREFIX=169.254
 local TUNNUM="$1" TUNDEV="tun$1"
 ip tuntap add mode tun user "${SUDO_USER}" name "${TUNDEV}"
@@ -32,12 +21,17 @@ ip addr add "${TUN_IP_PREFIX}.${TUNNUM}.1/24" dev "${TUNDEV}"
 ip link set dev "${TUNDEV}" up
 ip route change "${TUN_IP_PREFIX}.${TUNNUM}.0/24" dev "${TUNDEV}" rto_min 10ms
 
-
 # Apply NAT (masquerading) only to traffic from CS144's network devices
 iptables -t nat -A PREROUTING -s ${TUN_IP_PREFIX}.${TUNNUM}.0/24 -j CONNMARK --set-mark ${TUNNUM}
 iptables -t nat -A POSTROUTING -j MASQUERADE -m connmark --mark ${TUNNUM}
 echo 1 > /proc/sys/net/ipv4/ip_forward
+#+end_src
 
+#+begin_src shell
+  ubuntu:~$./tun.sh start 144
+#+end_src
+And I substitue this command to make it clear to see. Here is the translated snippet.
+#+begin_src shell
 ip tuntap add mode tun user zyy name tun144
 ip addr add 169.254.144.1/24 dev tun144
 ip link set dev tun144 up
@@ -47,16 +41,13 @@ iptables -t nat -A PREROUTING -s 169.254.144.0/24 -j CONNMARK --set-mark 144
 iptables -t nat -A POSTROUTING -j MASQUERADE -m connmark --mark 144
 echo 1 > /proc/sys/net/ipv4/ip_forward
 #+end_src
+From the manual, we can bind an IP address to tun device. After binding, the network address is 
+169.254.144.0/24 which has 24bits subnet-mask. also, the broadcast address is 169.254.144.255/24
+,169.254.144.1/24 host address
+Note:default getway, set all host bit to 1 except the last bit.
+169.254.144.254/24 default getway
 
-network address
-host address
-169.254.144.0/24  network address
-
-169.254.144.255/24 broadcast address
-
-169.254.144.1/24 host address
-
-route table show
+** route table show
 #+begin_src sh
 $ip route show
 
@@ -81,11 +72,8 @@ Destination     Gateway         Genmask         Flags Metric Ref    Use Iface
 
 #+end_src
 
-default getway, set all host bit to 1 except the last bit.
-
-169.254.144.254/24 default getway
-
-NAT (Network Address Translation)
+From the iproute tables, we know 169.254.144.0/24 network address can be routed to elsewhere catching the default getway.
+** NAT (Network Address Translation)
 #+begin_src sh
 zyy@ubuntu:~$ sudo iptables -t nat -L
 Chain PREROUTING (policy ACCEPT)
@@ -111,3 +99,59 @@ MASQUERADE  tcp  --  192.168.122.0/24    !192.168.122.0/24     masq ports: 1024-
 MASQUERADE  udp  --  192.168.122.0/24    !192.168.122.0/24     masq ports: 1024-65535
 MASQUERADE  all  --  192.168.122.0/24    !192.168.122.0/24 
 #+end_src
+In the CS144Lab4,  webget app binds an ip-address of 169.254.144.9, which belongs to tun144 ip network.
+#+begin_src c++
+    multiplexer_config.source = { "169.254.144.9", std::to_string( uint16_t( std::random_device()() ) ) };
+#+end_src
+As we can see the iptables above, let's illustrate the meaning of it by picture.
+[[file:./static/cs144/images/lab4_ip_tables.png]]
+If the source is in 169.254.144.0/24 network address, it will be set as mark 0x90 using masquerade target to route to elsewhere. 
+And when the packet is coming, the kernel will choose to route to write application. That's the lab4 routing strategy.
+* Analyse Data
+I collected for about 5 hours of data from 20250312 9:00:00 to 20250312 14:19:00. And I write a python script file to analyse the data to answer the 10 questions.
+- question 1: echo_reply_rate
+#+begin_quote
+loss               :     115
+dup                :     41
+echo_receive_rate  :     0.9987992440458167
+#+end_quote
+- question 2: longest concecutive
+#+begin_quote
+max_consecutive    :     8309
+#+end_quote
+- question 3: longest missing concecutive
+#+begin_quote
+max_missing        :     8
+#+end_quote
+- question 4: independent or correlated
+#+begin_quote
+N+1_reply_N_missing:     0.0006690501578540217
+N+1_reply_N_reply  :     0.999330949842146
+#+end_quote
+From the result, we can see that it's not idependent.
+- question 5/6: get minimum and maximum RTT
+#+begin_quote
+min RTT            :     20.2
+max RTT            :     495
+#+end_quote
+- question 7: Make a graph of the RTT as a function of time. Label the x-axis with the actual time of day (covering the 2+-hour period), and the y-axis should be the number of milliseconds of RTT.
+[[file:./static/cs144/images/lab4_rtt_function.png]]
+- question8: Make a histogram or Cumulative Distribution Function of the distribution of RTTs observed. What rough shape is the distribution?
+[[file:./static/cs144/images/lab4_histogram.png]]
+- question9: make a graph of the correlation between “RTT of ping #N” and “RTT of ping #N+1”.
+The x-axis should be the number of milliseconds from the first RTT, and the y-axis
+should be the number of milliseconds from the second RTT. How correlated is the RTT
+over time?
+[[file:./static/cs144/images/lab4_correlation.png]]
+I see but not clear that if this time RTT is large, maybe the second is small.
+* cs144 note
+:: scope operator which I haven't noticed before
+::close function when in function close
+#+begin_src c++
+  void FileDescriptor::FDWrapper::close()
+  {
+    CheckSystemCall( "close", ::close( fd_ ) );
+    eof_ = closed_ = true;
+  }
+#+end_src
+
