@@ -1,3 +1,9 @@
+#+TITLE: 2-pass-return-object-oriented-cpp
+#+DATE: 2025-03-30 10:48:52 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_oriented
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
 * argument pass
 - pass by value
 - pass by reference (to const)
@@ -43,34 +49,38 @@ Advice: all return value are set reference, if some cases happen that it's not a
 
 * friend
 #+begin_src c++
-class complex
-{
-public:
-  complex (double r= 0, double i= 0)
-    : re(r), im(i)
-    {}
+  class complex;
+  complex&
+  __doapl (complex* ths, const complex& r);
+
+  class complex
+  {
+  public:
+    complex (double r= 0, double i= 0)
+      : re(r), im(i)
+      {}
+      
+    complex& operator+=(const complex&);
+    double real() const{return re;}
+    double imag() const{return im;}
+
+  private:
+    double re, im;
     
-  complex& operator+=(const complex&);
-  double real() const{return re;}
-  double imag() const{return im;}
+    friend complex& __doapl (complex*, const complex&);
+  }
 
-private:
-  double re, im;
-  
-  friend complex& __doapl (complex*, const complex&);
-}
-
-inline complex&
-__doapl (complex* ths, const complex& r)
-{
-  ths->re += r.re;
-  ths->im += r.im;
-  return *ths;
-}
+  inline complex&
+  __doapl (complex* ths, const complex& r)
+  {
+    ths->re += r.re;
+    ths->im += r.im;
+    return *ths;
+  }
 #+end_src
 friend function can access the private data.( direct access)
 So we don't have to add class scope operator before the definition of the friend function.
-
+Note: it's allowed to declare an inline function in public or private.
 Another example,
 *objects belong to the same classs are friend each other*.
 #+begin_src c++
@@ -101,13 +111,13 @@ private:
 2.pass arg by reference (to const)
 3.return by reference
 4.const member function
-5.ctor initialization list(*:*)
+5.ctor list initialization (*:*)
 
 * Function Definition
 when to pass by reference, when to return by reference
 Let's see the argument pass procedure.
 There are two cases, 
-1. the first arg will be changed, and the second won't change, actually the we have space to store the changed value, then we return by reference like *+=*.
+1. the first arg will be changed, and the second won't change, actually we have space to store the changed value, then we return by reference like *+=*.
 2. we don't have allocated space to store the changed value, then we have to allocate memory on stack, and return by value. like *+*.
    
 example:

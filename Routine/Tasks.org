@@ -8,13 +8,18 @@ CLOSED: [2025-02-27 Thu 17:37] DEADLINE: <2025-02-21 Fri>
 CLOSED: [2025-03-03 Mon 11:34] DEADLINE: <2025-02-28 Fri>
 ** COMPLETED opensbi trap analyse
 CLOSED: [2025-03-23 Sun 09:58] DEADLINE: <2025-02-28 Fri>
+** DONE c++ learn
+CLOSED: [2025-03-24 Mon 09:10] DEADLINE: <2025-02-28 Fri>
 :LOGBOOK:
-- State "HOLD"       from "WAIT"       [2025-03-23 Sun 09:58]
-- State "DONE"       from "NEXT"       [2025-03-23 Sun 09:58]
+- State "DONE"       from "NEXT"       [2025-03-24 Mon 09:10]
 :END:
-** TODO c++ learn
-DEADLINE: <2025-02-28 Fri>
-** TODO lab4 net
+** DONE lab4 net
+CLOSED: [2025-03-24 Mon 09:10]
+:LOGBOOK:
+- State "DONE"       from "NEXT"       [2025-03-24 Mon 09:10]
+:END:
 ** TODO zhongyi ru men
-
+** TODO paper search
+** TODO lab5 material to read
+** TODO uboot Makefile
 * Backlog

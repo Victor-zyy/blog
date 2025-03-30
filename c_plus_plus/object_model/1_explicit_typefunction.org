@@ -1,5 +1,12 @@
-* conversion function
+#+TITLE: 1-explicit-typefunction-object-model-cpp
+#+DATE: 2025-03-30 13:44:09 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_model
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
 
+* conversion function
+form: *operator typename()*
 #+begin_src c++
 class Fraction
 {
@@ -49,9 +56,9 @@ Fraction d = f + 4;
 
 Fraction d = f + 4; The compiler will call non-explicit-one-argument ctor to convet 4 to *Fraction(4,1)*. And we have operator+ overload function so Fraction adds a Fraction is ok to compile even if we don't actually fully define this function.
 
-The non-explicit ctor is opposite to conversion function, like if you use conversion function you convert this type to another type, if you use non-explicit ctor , you convert other type to this type(ctor).
+The non-explicit ctor is the opposite of conversion function, like if you use conversion function you convert this type to another type, if you use non-explicit ctor , you convert other type to this type(ctor).
 
-*  Conflict
+* Conflict
 Btw, something ambiguous might happen when conflicts between conversion function and non-explicit ctor.
 #+begin_src c++
 class Fraction
@@ -86,7 +93,7 @@ explicit.cc:12:12: note: candidate: ‘Fraction Fraction::operator+(const Fracti
       |            ^~~~~~~~
 #+end_src
 
-The ambiguity is that overload operator+ function. operator+(double , int) and operator+(const Fraction& f);
+The ambiguity exists in that overload operator+ function. operator+(double , int) and operator+(const Fraction& f);
 
 * explicit
 The explicit means that you have to call ctor explicitly don't do implicitly in compile time.

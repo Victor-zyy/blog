@@ -1,3 +1,9 @@
+#+TITLE: 4-syntactic-sugar-object-model-cpp
+#+DATE: 2025-03-30 14:26:22 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_model
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
 * auto (since c++ 11)
 Using this keyword in c++ since c11, the compiler can deduce in the compilling time. If the typename is too long to write you can use it and let compiler to deduce.
 #+begin_src c++

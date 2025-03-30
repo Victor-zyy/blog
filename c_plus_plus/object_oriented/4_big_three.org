@@ -1,3 +1,10 @@
+#+TITLE: 4-big-three-object-oriented-cpp
+#+DATE: 2025-03-30 11:15:39 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_oriented
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
+
 * Big three
 why we need big there, and what conditions do we need big three? 
 The class contains pointer must include these three functions.
@@ -50,7 +57,7 @@ private:
 #+end_src
 
 ** ctor
-The string has two formats like, one is lens + string, another one is string end with *'\0'*. C and C++ choose the latter.
+The string has two formats like, one is lens + string, another one is string end with *'\0'*. C and C++ choose the latter one.
 #+begin_src c++
 inline
 String::String(const char* cstr = 0)
@@ -75,8 +82,8 @@ String::~String()
 ** copy op=
 If we don't provide a deep copy function of copy assignment, the compiler will generate a shadow copy version, which will causes memory leak in the future.
 
-I will show you a img to illustrate this danger.
-[[./img/4_copy_op=.png]]
+I will show you a img to illustrate this danger and the difference of shadow copy and deep copy.
+[[file:./static/c_plus_plus/images/4_copy_op=.png]]
 
 And the alias in c++ is dangerous.
 
@@ -102,7 +109,7 @@ s2 = s1;
 
 Don't forget self assignment check, it will cause undefined error when you don't.
 
-[[./img/4_copy_op=_self_check.png]]
+[[file:./static/c_plus_plus/images/4_copy_op=_self_check.png]]
 
 After deletion, the strcpy will access the memory which just deleted, will cause UB( undefined behavior).
 

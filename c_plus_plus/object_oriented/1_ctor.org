@@ -1,3 +1,10 @@
+#+TITLE: 1-basic-ctor-object-oriented-cpp
+#+DATE: 2025-03-30 10:09:44 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_oriented
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
+
 * C-plus-plus profile
 ** object
 - object based
@@ -12,7 +19,7 @@
 ** data and functions
 - C type[data] [functions]---------------->variable in memory
 - C++ class/struct [data, functions]------>object in memory
-Note: the function of class only has one copy which means when you create class only data occupies memory.
+Note: the function of class only has one copy which means when you create class only data occupies memory and vptr (if has virtual function inside class).
 ** C-plus-plus coding program
 .h/.cpp/.hpp never mind
 ** gurad declaration
@@ -87,7 +94,7 @@ The real/imag function will be canditate for inline functions automatically.Btw,
 * Constructor function (ctor)
 ** access level
 public
-protected ( which I don't give it to public interface and differs from private function I can use it)
+protected ( in which I don't give it to public interface and differs from private function , I can use it)
 protected example in 8_virtual_polymorphism.org file.
 private are not allowed by outside of the class
 #+begin_src c++
@@ -119,7 +126,7 @@ cout << c1.real();
 cout << c1.imag();
 #+end_src
 ** constructor (ctor)
-1. function name is class
+1. function name is class no return type
 2. default argument
 3. initialization list ( assignment not advised)
 #+begin_src c++
@@ -133,7 +140,7 @@ public:
 initialization stage:
 - initialization *:re(r), im(i)*
 - assignment
-when you use assignment to initialize private variable are allowed but low-efficiency
+when you use assignment to initialize private variable, it is allowed but low-efficiency
 #+begin_src c++
 public:
   complex (double r= 0, double i= 0)
@@ -168,8 +175,31 @@ complex c1;
 complex c2();
 #+end_src
 
-These two functions are not allowed, that is because the compiler doesn't deccide which one to call when construct c1 and c2, i mean both the ctor functions are ok to called.
-
+These two functions are not allowed, that is because the compiler doesn't deccide which one to call when construct c1 and c2, i mean both the ctor functions are ok to called. It is defined ok but called error, and it will print messages like that below.
+#+begin_src shell
+  complex_test.cpp:14:11: error: call of overloaded ‘complex()’ is ambiguous
+   14 |   complex c1;
+      |           ^~
+In file included from complex_test.cpp:2:
+complex.h:17:3: note: candidate: ‘complex::complex()’
+   17 |   complex (): re (0), im (0) { }
+      |   ^~~~~~~
+complex.h:16:3: note: candidate: ‘complex::complex(double, double)’
+   16 |   complex (double r = 0, double i = 0): re (r), im (i) { }
+#+end_src
+** brace initialization
+In the last example above, if you use *complex c2();* to declare an object, the compiler will think it might be a function declaration or object declaration which confuses the compiler. So, if you wanna use default ctor you can remove the *()*, or change it to *{}* braces.
+complex c2{}; complex c2;
+#+begin_src shell
+complex_test.cpp:14:13: warning: empty parentheses were disambiguated as a function declaration [-Wvexing-parse]
+   14 |   complex c2();
+      |             ^~
+complex_test.cpp:14:13: note: remove parentheses to default-initialize a variable
+   14 |   complex c2();
+      |             ^~
+      |             --
+complex_test.cpp:14:13: note: or replace parentheses with braces to value-initialize a variable
+#+end_src
 ** private ctor
 
 Singleton - design pattern, means just only one instance of a class.

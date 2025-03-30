@@ -1,3 +1,10 @@
+#+TITLE: 5-new-delete-basic-object-oriented-cpp
+#+DATE: 2025-03-30 11:28:52 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_oriented
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
+
 * stack and heap
 stack memory is used for local object, local var, argument passed, return val.
 heap memory is dynamically allocated using new, this memory is managed by OS.
@@ -9,16 +16,15 @@ heap memory is dynamically allocated using new, this memory is managed by OS.
   complex *p = new complex(2,1);
 }
 #+end_src
-when the program goes out of the scope, the object pointed by p is still alive but we can't access because the p is local var. In this case, it will cause memory leak.
-
+when the program goes out of the scope, the object pointed by p is still alive but we can't access because the p is local var. In this case, it will cause memory leak , so we need to release when not use it anymore.
 *** global object
 the whole program
 *** static local object
 the whole program
 
 * new
-new allocate memory firstly and the evoke the ctor.
-- allocate memory ( malloc)
+new expression memory firstly and then evoke the ctor, it will be divided three ops like that.
+- allocate memory ( using c-malloc )
 - convert type
 - ctor
 #+begin_src c++
@@ -54,8 +60,8 @@ ps-->|-----|           1.
          
 #+end_src
 
-step1. will call String::~String() dtor, delete[] m_data, release allocate memory storing hello string.
-step2. will call delete operator  which free(ps) the memory storing pointer to String.
+step1. will call String::~String() dtor, delete m_data, release allocate memory storing hello string (actually release the pointer storage).
+step2. will call delete operator which free(ps) the memory storing pointer to String.
 
 * detail of allocated memory in c++
 #+begin_src 
@@ -102,4 +108,6 @@ wake up 3 dtor,another one just wake up one time.
              |------|
 #+end_src
 
-[[./img/5_delete_array.png]]
+[[file:./static/c_plus_plus/images/5_delete_array.png]]
+
+And the string "world" and string "zhh" is still in memory without release in one time dtor.

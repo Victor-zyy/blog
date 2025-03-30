@@ -1,10 +1,17 @@
+#+TITLE: 7-oop-ood-object-oriented-cpp
+#+DATE: 2025-03-30 11:48:25 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_oriented
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
 * OOP and OOD
 object oriented programming, object oriented design
+We have three tools to design a good program, inheritance, composition, and delegation.
 ** Inheritance
 *** *is-a*
 The public inheritance way is "is-a", like person is a creature. dog is a animal. etc.
 *** outline 
-[[./img/7_inheritance.png]]
+[[file:./static/c_plus_plus/images/7_inheritance.png]]
 The same outline as composition.
 *** ctor and dtor
 The order of calling ctor when construct the class is from inner to outter, the dtor is the opposite.
@@ -34,11 +41,11 @@ public:
 #+end_src
 
 The outline of the queue class is like,
-[[./img/7_queue.png]]
-*** Adapter design pattern
+[[file:./static/c_plus_plus/images/7_queue.png]]
+*** adapter design pattern
 Also, it is a design pattern named Adapter, which means I have a great and more sophisticated class , and i wanna implement a simpler class, then I use the more complicated one to do it.
 *** ctor and dtor
-[[./img/7_composition.png]]
+[[file:./static/c_plus_plus/images/7_composition.png]]
 The order of calling ctor when construct the class is from inner to outter, the dtor is the opposite.
 #+begin_src c++
 Container::Container(...) : Component() {};
@@ -79,6 +86,6 @@ String::String() {...}
 
 *** outline
 The outline of delegation is like.
-[[./img/7_delegation.png]]
+[[file:./static/c_plus_plus/images/7_delegation.png]]
 As you can see, a, b and c are sharing the same string "hello", if each of them wants to change , it will cause *COW* technique.
 Another thing to notice is that, reference counting is necessary because of the sharing. That's we can know how many object are instanced before call dtor.

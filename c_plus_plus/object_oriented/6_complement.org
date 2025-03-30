@@ -1,3 +1,9 @@
+#+TITLE: 6-complement-objcet-oriented-cpp
+#+DATE: 2025-03-30 11:41:11 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_oriented
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
 * static
 ** static member data
 only has one slice in memory, and need to be definition.
@@ -14,7 +20,7 @@ cout << Complex::imag(&c2);
 #+end_src
 
 The member function only has one slice, it needs different address of object to access data.
-[[./img/6_static_object.png]]
+[[file:./static/c_plus_plus/images/6_static_object.png]]
 
 Example using static:
 #+begin_src c++
@@ -100,7 +106,7 @@ public:
 cout is kind of ostream, and there are many *operator<<* overload function.
 
 * template
-  The template will be compiled successfully, but when called by user, it will be compiled again which might cause error. And the most important thing is operator overload function.
+  The template will be compiled successfully, but when called by user, it will be compiled again which might cause error. And the most important thing is operator overload function. The aim of template is generalization.
 ** template class  
 #+begin_src c++
 template<typename T>

@@ -1,7 +1,13 @@
+#+TITLE: 2-special-class-object-model-cpp
+#+DATE: 2025-03-30 13:55:42 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_model
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
 * pointer-like classes
 we say pointer like classes are smart pointers.
+overload operator* and operator-> function
 ** simple in class
-
 #+begin_src c++
 
   template<class T>
@@ -69,8 +75,9 @@ The outline of this iterator is like this.
 Let's clarify this example, the user didn't know prev and next, the only know the Foo object, which means that the operator* and operator-> much behaves like linked list Foo object.
 So  ite->method is the same as (*ite).method, and &(*ite)->method
 
-Nomatter how smarter the smart_ptr is , the operator* and operator-> didn't change except for iterator which has to resolve the real object node like Foo object.
+No matter how smarter the smart_ptr is , the operator* and operator-> didn't change except for iterator which has to resolve the real object node like Foo object.
 * function-like classes
+overload operator() function
 ** example
 Example:
 #+begin_src c++

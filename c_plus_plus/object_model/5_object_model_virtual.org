@@ -1,3 +1,9 @@
+#+TITLE: 5-vptr-vbtl-object-model-cpp
+#+DATE: 2025-03-30 14:27:20 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_model
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
 * vptr and vtbl
 ** outline
 Let's use an example to illustrate the c++ object model (aka vptr and vbtl).

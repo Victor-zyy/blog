@@ -1,3 +1,9 @@
+#+TITLE: 6-new-delete-object-model-cpp
+#+DATE: 2025-03-30 14:28:16 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_model
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
 * operator new/delete
 ** introduction
 In the last sections, we've already talked about new and delete. new expression is divided three parts

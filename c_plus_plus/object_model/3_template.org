@@ -1,3 +1,9 @@
+#+TITLE: 3-template-object-model-cpp
+#+DATE: 2025-03-30 14:05:22 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_model
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
 * Template
   The template will be compiled successfully, but when called by user, it will be compiled again which might cause error. And the most important thing is operator overload function.
 ** template class  
@@ -129,7 +135,8 @@ The template specialization is used for special design of template, we all know 
 
   cout << hash<long>()(100);
 #+end_src
-In the example above, we have not only generalization but also specialization, when we instance a new object passing type like( char, int, long), the compiler will compile the specialization template related, if passed other type, the compiler will use the generalization template. It's useful in some cases.
+
+In the example above, we have not only generalization but also specialization, when we instance a new object passing type like( char, int, long), the compiler will compile the specialization template related, if passed other types, the compiler will use the generalization template. It's useful in some cases.
 
 ** partial specialization
 The partial specialization includes two types like numeric partial specialization and scope partial specialization.

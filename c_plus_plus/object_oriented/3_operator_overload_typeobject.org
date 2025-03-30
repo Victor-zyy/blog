@@ -1,3 +1,9 @@
+#+TITLE: 3-operator-overload-object-oriented-cpp
+#+DATE: 2025-03-30 11:06:23 +0800>
+#+HUGO_DRAFT: false
+#+HUGO_CATEGORIES: object_oriented
+#+HUGO_TAGS: c++ language
+#+HUGO_CUSTOM_FRONT_MATTER: :showtoc true
 * operator overload
 ** member function
 the member function overload contains this pointer implicitly, but you don't have to pass the argument. you can use it freely.
@@ -25,10 +31,10 @@ c3 += c2 += c1;
 
 #+end_src
 
-why we need return by reference when we define *+=* overload function? If you just use c2 += c1; you can define void return type, but this is consecutive assignment which means the expression must return a type that can be passed to +=. So *complex &* matters.
+why we need return by reference when we define *+=* overload function? If you just use c2 += c1; you can define void return type, but when there is a consecutive assignment which means the expression must return a type that can be passed to another +=. So *complex &* matters. *c3 += c2 += c1*
 
 ** non-member function (global function)
-no this pointer, it belongs to global function.
+There is no *this* pointer, it belongs to global function.
 #+begin_src c++
 inline complex operator + (const complex &x, const complex &y)
 {
@@ -58,8 +64,7 @@ Besides, it used *temp object*--- *typename()*.There is no allocated storage pro
 
 Other definitions outside the class.
 #+begin_src c++
-inline complex 
-//inline complex& ok
+inline complex  //inline complex& ok
 operator + (const complex &x)
 {
   return x;
@@ -93,6 +98,6 @@ cout << conj(c1)
 cout << c1 << conj(c1);
 #+end_src
 
-The operator<< overload function must be non-member function, because the complex is new than ostream.
+The operator<< overload function must be non-member function, because the complex is new than ostream and the first parameter is always an ostream object. It would have to be a member of the ostream class but we can not change).
 And << left operand is cout, right operand is complex x; return by reference is for sure in case of consecutive usage.
 
