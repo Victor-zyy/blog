@@ -64,3 +64,10 @@ In the reference manual, you can set the xvec in two different modes, the most u
   	.dword	KERNBASE
 #+end_src
 
+
+** jr with fpic option
+we can just jump to the VMA very nice
+#+begin_src asm
+	la  	a2, jump_relocated
+	jr 	a2
+#+end_src

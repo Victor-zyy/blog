@@ -1,0 +1,3 @@
+* sbi_ecall
+* M-mode
+M-mode doesn't handle exceptions by default.  So the MMU doesn't take effects.

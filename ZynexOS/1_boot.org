@@ -1,0 +1,68 @@
+* PC BootStrap
+** i386
+*** x86 assembly language
+Since we have two types of assembly language to write called INTEL Syntax used by NASM and AT&T Syntax used by GNU, but we use the GNU Assembler, so we need to get familar with the AT&T forms of assembly language. At first we don't have to read all the manual at once, when we need just read them as a reference.
+The link below talks the conversion of AT&T and INTEL Syntax.
+[[http://www.delorie.com/djgpp/doc/brennan/brennan_att_inline_djgpp.html][Assembly for x86]]
+*** kern monitor
+In mit6.828 lab1, when you type *make qemu-nox* command, it will run in small and simple monitor prompt by K> in the console running on the virtual memory address.
+#+begin_src 
+    6828 decimal is 15254 octal!
+    entering test_backtrace 5
+    entering test_backtrace 4
+    entering test_backtrace 3
+    entering test_backtrace 2
+    entering test_backtrace 1
+    entering test_backtrace 0
+    leaving test_backtrace 0
+    leaving test_backtrace 1
+    leaving test_backtrace 2
+    leaving test_backtrace 3
+    leaving test_backtrace 4
+    leaving test_backtrace 5
+    He110 WorldWelcome to the JOS kernel monitor!
+    Type 'help' for a list of commands.
+    K> 
+#+end_src
+*** PC physical memory layout
+#+begin_src 
+    +------------------+  <- 0xFFFFFFFF (4GB)
+    |      32-bit      |
+    |  memory mapped   |
+    |     devices      |
+    |                  |
+    /\/\/\/\/\/\/\/\/\/\
+
+    /\/\/\/\/\/\/\/\/\/\
+    |                  |
+    |      Unused      |
+    |                  |
+    +------------------+  <- depends on amount of RAM
+    |                  |
+    |                  |
+    | Extended Memory  |
+    |                  |
+    |                  |
+    +------------------+  <- 0x00100000 (1MB)
+    |     BIOS ROM     |
+    +------------------+  <- 0x000F0000 (960KB)
+    |  16-bit devices, |
+    |  expansion ROMs  |
+    +------------------+  <- 0x000C0000 (768KB)
+    |   VGA Display    |
+    +------------------+  <- 0x000A0000 (640KB)
+    |                  |
+    |    Low Memory    |
+    |                  |
+    +------------------+  <- 0x00000000
+#+end_src
+*** Bios
+The bios resides in 0x0000F000 ~ 0x 0000FFFF memory address, occupies for 64KB region. And the storing device of bios ranges from ROM to updatable and flexible rom. After power is on, the first instruction is a long jump code in BIOS.
+#+begin_src asm
+The target architecture is set to "i8086".
+[f000:fff0]    0xffff0:	ljmp   $0xf000,$0xe05b
+#+end_src
+On processor reset, the (simulated) processor enters real mode and sets CS to 0xf000 and the IP to 0xfff0, so that execution begins at that (CS:IP) segment address. And the address is interpreted as real mode design.
+*** real mode and protected mode
+Once power on, the x86 goes into real mode which can only access 1MB of low memory. The bios is the first program to run.
+** riscv
