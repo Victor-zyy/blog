@@ -1,0 +1,225 @@
+* Entry
+** tool
+gdb + qemu + riscv + linux-kernel
+#+begin_src sh
+  add-symbol-file vmlinux -s .head.text 0x80200000
+#+end_src
+** pic / none-pic
+
+** vmlinux
+load section
+#+begin_src
+    RISCV_ATTRIBUT 0x00000000065b0d6c 0x0000000000000000 0x0000000000000000
+                 0x0000000000000037 0x0000000000000000  R      0x1
+  LOAD           0x0000000000001000 0xffffffff80000000 0x0000000000000000
+                 0x000000000040e6f6 0x000000000040e6f6  R E    0x1000
+  LOAD           0x0000000000600000 0xffffffff80600000 0x0000000000600000
+                 0x000000000002b560 0x000000000002b560  R E    0x200000
+  LOAD           0x000000000062c000 0xffffffff80800000 0x0000000000800000
+                 0x0000000000016c18 0x0000000000016c18  RW     0x1000
+  LOAD           0x0000000000643000 0xffffffff80a00000 0x0000000000a00000
+                 0x0000000000161844 0x0000000000161844  RW     0x1000
+  LOAD           0x00000000007a5000 0xffffffff80c00000 0x0000000000c00000
+                 0x0000000000000698 0x0000000000000698  R      0x1000
+  LOAD           0x00000000007a6000 0xffffffff80e00000 0x0000000000e00000
+                 0x00000000000be800 0x00000000001010ad  RW     0x1000
+  NOTE           0x00000000007a47f0 0xffffffff80b617f0 0x0000000000b617f0
+                 0x0000000000000054 0x0000000000000054  R      0x4
+  GNU_STACK      0x0000000000000000 0x0000000000000000 0x0000000000000000
+                 0x0000000000000000 0x0000000000000000  RW     0x10
+
+
+#+end_src
+
+Sections
+#+begin_src
+    [Nr] Name              Type             Address           Offset
+       Size              EntSize          Flags  Link  Info  Align
+  [ 0]                   NULL             0000000000000000  00000000
+       0000000000000000  0000000000000000           0     0     0
+  [ 1] .head.text        PROGBITS         ffffffff80000000  00001000
+       0000000000001e90  0000000000000000  AX       0     0     4096
+  [ 2] .text             PROGBITS         ffffffff80002000  00003000
+       000000000040c6f6  0000000000000000  AX       0     0     4
+  [ 3] .init.text        PROGBITS         ffffffff80600000  00600000
+       000000000002a3d6  0000000000000000  AX       0     0     2097152
+  [ 4] .exit.text        PROGBITS         ffffffff8062a3d8  0062a3d8
+       0000000000001188  0000000000000000  AX       0     0     2
+  [ 5] .init.data        PROGBITS         ffffffff80800000  0062c000
+       000000000000ec58  0000000000000000  WA       0     0     4096
+  [ 6] .data..percpu     PROGBITS         ffffffff8080f000  0063b000
+       00000000000079d8  0000000000000000  WA       0     0     64
+  [ 7] .alternative      PROGBITS         ffffffff808169d8  006429d8
+       0000000000000240  0000000000000000   A       0     0     1
+  [ 8] .rodata           PROGBITS         ffffffff80a00000  00643000
+       000000000011eb70  0000000000000000  WA       0     0     64
+  [ 9] .pci_fixup        PROGBITS         ffffffff80b1eb70  00761b70
+       0000000000003b58  0000000000000000   A       0     0     8
+
+#+end_src
+** head.S
+_start symbol defined in arch/riscv/kernel/head.S
+
+#+begin_src asm
+  __HEAD
+  ENTRY(_start)
+  	/*
+  	 ,* Image header expected by Linux boot-loaders. The image header data
+  	 ,* structure is described in asm/image.h.
+  	 ,* Do not modify it without modifying the structure and all bootloaders
+  	 ,* that expects this header format!!
+  	 ,*/
+  #ifdef CONFIG_EFI  // actually we define this Macro
+  	/*
+  	 ,* This instruction decodes to "MZ" ASCII required by UEFI.
+  	 ,*/
+  	c.li s4,-13
+  	j _start_kernel
+  #else
+  	/* jump to start kernel */
+  	j _start_kernel
+  	/* reserved */
+  	.word 0
+  #endif
+#+end_src
+
+_start_kernel  arch/riscv/kernel/head.S
+#+begin_src asm
+  ENTRY(_start_kernel)
+  	/* Mask all interrupts */
+  	csrw CSR_IE, zero
+  	csrw CSR_IP, zero
+
+  	/* Load the global pointer */
+  .option push
+  .option norelax
+  	la gp, __global_pointer$
+  .option pop
+
+  	/*
+  	 ,* Disable FPU to detect illegal usage of
+  	 ,* floating point in kernel space
+  	 ,*/
+  	li t0, SR_FS
+  	csrc CSR_STATUS, t0
+
+
+  #ifndef CONFIG_XIP_KERNEL
+  	/* Pick one hart to run the main boot sequence */
+  	la a3, hart_lottery
+  	li a2, 1
+  	amoadd.w a3, a2, (a3)
+  	bnez a3, .Lsecondary_start
+
+  #else
+  	/* hart_lottery in flash contains a magic number */
+  	la a3, hart_lottery
+  	mv a2, a3
+  	XIP_FIXUP_OFFSET a2
+  	lw t1, (a3)
+  	amoswap.w t0, t1, (a2)
+  	/* first time here if hart_lottery in RAM is not set */
+  	beq t0, t1, .Lsecondary_start
+
+  	la sp, _end + THREAD_SIZE
+  	XIP_FIXUP_OFFSET sp
+  	mv s0, a0
+  	call __copy_data
+
+  	/* Restore a0 copy */
+  	mv a0, s0
+  #endif
+
+  #ifndef CONFIG_XIP_KERNEL
+  	/* Clear BSS for flat non-ELF images */
+  	la a3, __bss_start
+  	la a4, __bss_stop
+  	ble a4, a3, clear_bss_done
+  clear_bss:
+  	REG_S zero, (a3)
+  	add a3, a3, RISCV_SZPTR
+  	blt a3, a4, clear_bss
+  clear_bss_done:
+  #endif
+  	/* Save hart ID and DTB physical address */
+  	mv s0, a0
+  	mv s1, a1
+
+  	la a2, boot_cpu_hartid
+  	XIP_FIXUP_OFFSET a2
+  	REG_S a0, (a2)
+
+  	/* Initialize page tables and relocate to virtual addresses */
+  	la tp, init_task
+  	la sp, init_thread_union + THREAD_SIZE
+  	XIP_FIXUP_OFFSET sp
+  #ifdef CONFIG_BUILTIN_DTB
+  	la a0, __dtb_start
+  #else
+  	mv a0, s1
+  #endif /* CONFIG_BUILTIN_DTB */
+  	/* Set trap vector to spin forever to help debug */
+  	la a3, .Lsecondary_park
+  	csrw CSR_TVEC, a3
+  	call setup_vm
+  #ifdef CONFIG_MMU
+  	la a0, early_pg_dir
+  	XIP_FIXUP_OFFSET a0
+  	call relocate
+  #endif /* CONFIG_MMU */
+
+  	call setup_trap_vector
+  	/* Restore C environment */
+  	la tp, init_task
+  	sw zero, TASK_TI_CPU(tp)
+  	la sp, init_thread_union + THREAD_SIZE
+
+  #ifdef CONFIG_KASAN
+  	call kasan_early_init
+  #endif
+  	/* Start the kernel */
+  	call soc_early_init
+  	tail start_kernel
+
+  .Lsecondary_start:
+  #ifdef CONFIG_SMP
+  	/* Set trap vector to spin forever to help debug */
+  	la a3, .Lsecondary_park
+  	csrw CSR_TVEC, a3
+
+  	slli a3, a0, LGREG
+  	la a1, __cpu_up_stack_pointer
+  	XIP_FIXUP_OFFSET a1
+  	la a2, __cpu_up_task_pointer
+  	XIP_FIXUP_OFFSET a2
+  	add a1, a3, a1
+  	add a2, a3, a2
+
+  	/*
+  	 ,* This hart didn't win the lottery, so we wait for the winning hart to
+  	 ,* get far enough along the boot process that it should continue.
+  	 ,*/
+  .Lwait_for_cpu_up:
+  	/* FIXME: We should WFI to save some energy here. */
+  	REG_L sp, (a1)
+  	REG_L tp, (a2)
+  	beqz sp, .Lwait_for_cpu_up
+  	beqz tp, .Lwait_for_cpu_up
+  	fence
+
+  	tail secondary_start_common
+  #endif
+
+  END(_start_kernel)
+#+end_src
+
+
+
+MTD layer
+#+begin_src
+[0.363406] physmap-flash physmap-flash.0: physmap platform flash device: [mem 0x20000000-0x21ffffff]
+[    0.366476] physmap-flash.0: Found 2 x16 devices at 0x0 in 32-bit bank. Manufacturer ID 0x000000 Chip ID 0x000000
+[    0.367813] Intel/Sharp Extended Query Table at 0x0031
+[    0.369342] Using buffer write method
+
+#+end_src

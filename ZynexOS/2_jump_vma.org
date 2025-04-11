@@ -1,0 +1,66 @@
+* bug reporting
+** mtvec/stvec alignment
+In the reference manual, you can set the xvec in two different modes, the most usally one we use is first one, but we need 4 bytes aligned.
+** la instruction
+
+* jump VMA
+** ret
+#+begin_src asm
+      call    relocated
+
+  	.align 3
+  relocated:
+  	/* Relocate return address */
+  	la 	t0, kernel_base
+  	ld	a1, 0(t0)
+  	add 	ra, ra, a1
+
+  	/* Point stvec to virtual address of intruction after satp write */
+  	la 	a2, 1f
+  	add	a2, a2, a1
+  	csrw 	CSR_STVEC, a2
+  	
+  	/* Compute satp for kernel page tables, but don't load it yet */
+  	lla     a6, (entry_pgdir0)
+  	srli    a6, a6, 12
+  	li      t0, 0
+  	or      t0, t0, a6
+  	li 	t1, SATP_SV48
+  	or      t0, t0, t1
+  	sfence.vma
+  	csrw    CSR_SATP, t0
+
+  .align 2
+  1:	
+  	/* Set trap vector to spin forever to help debug */
+  	la a0, _park_infinite
+  	csrw CSR_STVEC, a0
+
+  	ret
+#+end_src
+** jr jump instruction
+#+begin_src asm
+    	lla     a6, (entry_pgdir0)
+    	srli    a6, a6, 12
+    	li      t0, 0
+    	or      t0, t0, a6
+    	li 	t1, SATP_SV48
+    	or      t0, t0, t1
+    	sfence.vma
+    	csrw    CSR_SATP, t0
+
+    	la 	t0, kernel_base
+    	ld	a1, 0(t0)
+    	la  	a2, jump_relocated
+    	add	t0, a1, a2
+    	jr 	t0
+    jump_relocated:	
+
+
+  	.align 3
+  	.section .data
+  	.globl kernel_base
+  kernel_base:	
+  	.dword	KERNBASE
+#+end_src
+

@@ -1,0 +1,409 @@
+* boot linux procedure
+** booti command
+#+begin_src shell
+  help booti
+booti - boot Linux kernel 'Image' format from memory
+
+Usage:
+booti [addr [initrd[:size]] [fdt]]
+    - boot Linux flat or compressed 'Image' stored at 'addr'
+	The argument 'initrd' is optional and specifies the address
+	of an initrd in memory. The optional parameter ':size' allows
+	specifying the size of a RAW initrd.
+	Currently only booting from gz, bz2, lzma and lz4 compression
+	types are supported. In order to boot from any of these compressed
+	images, user have to set kernel_comp_addr_r and kernel_comp_size environment
+	variables beforehand.
+	Since booting a Linux kernel requires a flat device-tree, a
+	third argument providing the address of the device-tree blob
+	is required. To boot a kernel with a device-tree blob but
+	without an initrd image, use a '-' for the initrd argument.
+#+end_src
+
+** bootargs
+setenv bootargs "console=ttyS0 $mtdparts root=31:2 rw rootfstype=jffs2"
+booti 0x80200000 - $fdtcontrorller
+** do_booti
+#+begin_src c
+U_BOOT_CMD(
+	booti,	CONFIG_SYS_MAXARGS,	1,	do_booti,
+	"boot Linux kernel 'Image' format from memory", booti_help_text
+);
+#+end_src
+
+#+begin_src c
+  int do_booti(struct cmd_tbl *cmdtp, int flag, int argc, char *const argv[])
+  {
+  	int ret;
+
+  	/* Consume 'booti' */
+  	argc--; argv++;
+
+  	if (booti_start(cmdtp, flag, argc, argv, &images))
+  		return 1;
+
+  	/*
+  	 ,* We are doing the BOOTM_STATE_LOADOS state ourselves, so must
+  	 ,* disable interrupts ourselves
+  	 ,*/
+  	bootm_disable_interrupts();
+
+  	images.os.os = IH_OS_LINUX;
+  #ifdef CONFIG_RISCV_SMODE
+  	images.os.arch = IH_ARCH_RISCV;
+  #elif CONFIG_ARM64
+  	images.os.arch = IH_ARCH_ARM64;
+  #endif
+  	ret = do_bootm_states(cmdtp, flag, argc, argv,
+  #ifdef CONFIG_SYS_BOOT_RAMDISK_HIGH
+  			      BOOTM_STATE_RAMDISK |
+  #endif
+  			      BOOTM_STATE_OS_PREP | BOOTM_STATE_OS_FAKE_GO |
+  			      BOOTM_STATE_OS_GO,
+  			      &images, 1);
+
+  	return ret;
+  }
+#+end_src
+defined in include/image.h
+#+begin_src c
+extern bootm_headers_t images;
+#+end_src
+
+#+begin_src c
+
+  /*
+   ,* Image booting support
+   ,*/
+  static int booti_start(struct cmd_tbl *cmdtp, int flag, int argc,
+  		       char *const argv[], bootm_headers_t *images)
+  {
+  	int ret;
+  	ulong ld;
+  	ulong relocated_addr;
+  	ulong image_size;
+  	uint8_t *temp;
+  	ulong dest;
+  	ulong dest_end;
+  	unsigned long comp_len;
+  	unsigned long decomp_len;
+  	int ctype;
+
+  	ret = do_bootm_states(cmdtp, flag, argc, argv, BOOTM_STATE_START,
+  			      images, 1);
+
+  	/* Setup Linux kernel Image entry point */
+  	if (!argc) {
+  		ld = image_load_addr;
+  		debug("*  kernel: default image load address = 0x%08lx\n",
+  				image_load_addr);
+  	} else {
+  		ld = hextoul(argv[0], NULL);
+  		debug("*  kernel: cmdline image address = 0x%08lx\n", ld);
+  	}
+
+  	temp = map_sysmem(ld, 0);
+  	ctype = image_decomp_type(temp, 2);
+  	if (ctype > 0) {
+  		dest = env_get_ulong("kernel_comp_addr_r", 16, 0);
+  		comp_len = env_get_ulong("kernel_comp_size", 16, 0);
+  		if (!dest || !comp_len) {
+  			puts("kernel_comp_addr_r or kernel_comp_size is not provided!\n");
+  			return -EINVAL;
+  		}
+  		if (dest < gd->ram_base || dest > gd->ram_top) {
+  			puts("kernel_comp_addr_r is outside of DRAM range!\n");
+  			return -EINVAL;
+  		}
+
+  		debug("kernel image compression type %d size = 0x%08lx address = 0x%08lx\n",
+  			ctype, comp_len, (ulong)dest);
+  		decomp_len = comp_len * 10;
+  		ret = image_decomp(ctype, 0, ld, IH_TYPE_KERNEL,
+  				 (void *)dest, (void *)ld, comp_len,
+  				 decomp_len, &dest_end);
+  		if (ret)
+  			return ret;
+  		/* dest_end contains the uncompressed Image size */
+  		memmove((void *) ld, (void *)dest, dest_end);
+  	}
+  	unmap_sysmem((void *)ld);
+
+  	ret = booti_setup(ld, &relocated_addr, &image_size, false);
+  	if (ret != 0)
+  		return 1;
+
+  	/* Handle BOOTM_STATE_LOADOS */
+  	if (relocated_addr != ld) {
+  		printf("Moving Image from 0x%lx to 0x%lx, end=%lx\n", ld,
+  		       relocated_addr, relocated_addr + image_size);
+  		memmove((void *)relocated_addr, (void *)ld, image_size);
+  	}
+
+  	images->ep = relocated_addr;
+  	images->os.start = relocated_addr;
+  	images->os.end = relocated_addr + image_size;
+
+  	lmb_reserve(&images->lmb, images->ep, le32_to_cpu(image_size));
+
+  	/*
+  	 ,* Handle the BOOTM_STATE_FINDOTHER state ourselves as we do not
+  	 ,* have a header that provide this informaiton.
+  	 ,*/
+  	if (bootm_find_images(flag, argc, argv, relocated_addr, image_size))
+  		return 1;
+
+  	return 0;
+  }
+#+end_src
+
+#+begin_src c
+/**
+ * Execute selected states of the bootm command.
+ *
+ * Note the arguments to this state must be the first argument, Any 'bootm'
+ * or sub-command arguments must have already been taken.
+ *
+ * Note that if states contains more than one flag it MUST contain
+ * BOOTM_STATE_START, since this handles and consumes the command line args.
+ *
+ * Also note that aside from boot_os_fn functions and bootm_load_os no other
+ * functions we store the return value of in 'ret' may use a negative return
+ * value, without special handling.
+ *
+ * @param cmdtp		Pointer to bootm command table entry
+ * @param flag		Command flags (CMD_FLAG_...)
+ * @param argc		Number of subcommand arguments (0 = no arguments)
+ * @param argv		Arguments
+ * @param states	Mask containing states to run (BOOTM_STATE_...)
+ * @param images	Image header information
+ * @param boot_progress 1 to show boot progress, 0 to not do this
+ * Return: 0 if ok, something else on error. Some errors will cause this
+ *	function to perform a reboot! If states contains BOOTM_STATE_OS_GO
+ *	then the intent is to boot an OS, so this function will not return
+ *	unless the image type is standalone.
+ */
+int do_bootm_states(struct cmd_tbl *cmdtp, int flag, int argc,
+		    char *const argv[], int states, bootm_headers_t *images,
+		    int boot_progress)
+{
+	boot_os_fn *boot_fn;
+	ulong iflag = 0;
+	int ret = 0, need_boot_fn;
+
+	images->state |= states;
+
+	/*
+	 * Work through the states and see how far we get. We stop on
+	 * any error.
+	 */
+	if (states & BOOTM_STATE_START)
+		ret = bootm_start(cmdtp, flag, argc, argv);
+
+	if (!ret && (states & BOOTM_STATE_FINDOS))
+		ret = bootm_find_os(cmdtp, flag, argc, argv);
+
+	if (!ret && (states & BOOTM_STATE_FINDOTHER))
+		ret = bootm_find_other(cmdtp, flag, argc, argv);
+
+	/* Load the OS */
+	if (!ret && (states & BOOTM_STATE_LOADOS)) {
+		iflag = bootm_disable_interrupts();
+		ret = bootm_load_os(images, 0);
+		if (ret && ret != BOOTM_ERR_OVERLAP)
+			goto err;
+		else if (ret == BOOTM_ERR_OVERLAP)
+			ret = 0;
+	}
+
+	/* Relocate the ramdisk */
+#ifdef CONFIG_SYS_BOOT_RAMDISK_HIGH
+	if (!ret && (states & BOOTM_STATE_RAMDISK)) {
+		ulong rd_len = images->rd_end - images->rd_start;
+
+		ret = boot_ramdisk_high(&images->lmb, images->rd_start,
+			rd_len, &images->initrd_start, &images->initrd_end);
+		if (!ret) {
+			env_set_hex("initrd_start", images->initrd_start);
+			env_set_hex("initrd_end", images->initrd_end);
+		}
+	}
+#endif
+#if CONFIG_IS_ENABLED(OF_LIBFDT) && defined(CONFIG_LMB)
+	if (!ret && (states & BOOTM_STATE_FDT)) {
+		boot_fdt_add_mem_rsv_regions(&images->lmb, images->ft_addr);
+		ret = boot_relocate_fdt(&images->lmb, &images->ft_addr,
+					&images->ft_len);
+	}
+#endif
+
+	/* From now on, we need the OS boot function */
+	if (ret)
+		return ret;
+	boot_fn = bootm_os_get_boot_func(images->os.os);
+	need_boot_fn = states & (BOOTM_STATE_OS_CMDLINE |
+			BOOTM_STATE_OS_BD_T | BOOTM_STATE_OS_PREP |
+			BOOTM_STATE_OS_FAKE_GO | BOOTM_STATE_OS_GO);
+	if (boot_fn == NULL && need_boot_fn) {
+		if (iflag)
+			enable_interrupts();
+		printf("ERROR: booting os '%s' (%d) is not supported\n",
+		       genimg_get_os_name(images->os.os), images->os.os);
+		bootstage_error(BOOTSTAGE_ID_CHECK_BOOT_OS);
+		return 1;
+	}
+
+
+	/* Call various other states that are not generally used */
+	if (!ret && (states & BOOTM_STATE_OS_CMDLINE))
+		ret = boot_fn(BOOTM_STATE_OS_CMDLINE, argc, argv, images);
+	if (!ret && (states & BOOTM_STATE_OS_BD_T))
+		ret = boot_fn(BOOTM_STATE_OS_BD_T, argc, argv, images);
+	if (!ret && (states & BOOTM_STATE_OS_PREP)) {
+		ret = bootm_process_cmdline_env(images->os.os == IH_OS_LINUX);
+		if (ret) {
+			printf("Cmdline setup failed (err=%d)\n", ret);
+			ret = CMD_RET_FAILURE;
+			goto err;
+		}
+		ret = boot_fn(BOOTM_STATE_OS_PREP, argc, argv, images);
+	}
+
+#ifdef CONFIG_TRACE
+	/* Pretend to run the OS, then run a user command */
+	if (!ret && (states & BOOTM_STATE_OS_FAKE_GO)) {
+		char *cmd_list = env_get("fakegocmd");
+
+		ret = boot_selected_os(argc, argv, BOOTM_STATE_OS_FAKE_GO,
+				images, boot_fn);
+		if (!ret && cmd_list)
+			ret = run_command_list(cmd_list, -1, flag);
+	}
+#endif
+
+	/* Check for unsupported subcommand. */
+	if (ret) {
+		puts("subcommand not supported\n");
+		return ret;
+	}
+
+	/* Now run the OS! We hope this doesn't return */
+	if (!ret && (states & BOOTM_STATE_OS_GO))
+		ret = boot_selected_os(argc, argv, BOOTM_STATE_OS_GO,
+				images, boot_fn);
+
+	/* Deal with any fallout */
+err:
+	if (iflag)
+		enable_interrupts();
+
+	if (ret == BOOTM_ERR_UNIMPLEMENTED)
+		bootstage_error(BOOTSTAGE_ID_DECOMP_UNIMPL);
+	else if (ret == BOOTM_ERR_RESET)
+		do_reset(cmdtp, flag, argc, argv);
+
+	return ret;
+}
+#+end_src
+
+#+begin_src c
+static int bootm_start(struct cmd_tbl *cmdtp, int flag, int argc,
+		       char *const argv[])
+{
+	memset((void *)&images, 0, sizeof(images));
+	images.verify = env_get_yesno("verify");
+
+	boot_start_lmb(&images);
+
+	bootstage_mark_name(BOOTSTAGE_ID_BOOTM_START, "bootm_start");
+	images.state = BOOTM_STATE_START;
+
+	return 0;
+}
+#+end_src
+boot_os table
+#+begin_src c
+static boot_os_fn *boot_os[] = {
+	[IH_OS_U_BOOT] = do_bootm_standalone,
+#ifdef CONFIG_BOOTM_LINUX
+	[IH_OS_LINUX] = do_bootm_linux,
+#endif
+#ifdef CONFIG_BOOTM_NETBSD
+	[IH_OS_NETBSD] = do_bootm_netbsd,
+#endif
+#ifdef CONFIG_BOOTM_RTEMS
+	[IH_OS_RTEMS] = do_bootm_rtems,
+#endif
+#if defined(CONFIG_BOOTM_OSE)
+	[IH_OS_OSE] = do_bootm_ose,
+#endif
+#if defined(CONFIG_BOOTM_PLAN9)
+	[IH_OS_PLAN9] = do_bootm_plan9,
+#endif
+#if defined(CONFIG_BOOTM_VXWORKS) && \
+	(defined(CONFIG_PPC) || defined(CONFIG_ARM) || defined(CONFIG_RISCV))
+	[IH_OS_VXWORKS] = do_bootm_vxworks,
+#endif
+#if defined(CONFIG_CMD_ELF)
+	[IH_OS_QNX] = do_bootm_qnxelf,
+#endif
+#ifdef CONFIG_INTEGRITY
+	[IH_OS_INTEGRITY] = do_bootm_integrity,
+#endif
+#ifdef CONFIG_BOOTM_OPENRTOS
+	[IH_OS_OPENRTOS] = do_bootm_openrtos,
+#endif
+#ifdef CONFIG_BOOTM_OPTEE
+	[IH_OS_TEE] = do_bootm_tee,
+#endif
+#ifdef CONFIG_BOOTM_EFI
+	[IH_OS_EFI] = do_bootm_efi,
+#endif
+};
+#+end_src
+#+begin_src c
+boot_os_fn *bootm_os_get_boot_func(int os)
+{
+#ifdef CONFIG_NEEDS_MANUAL_RELOC
+	static bool relocated;
+
+	if (!relocated) {
+		int i;
+
+		/* relocate boot function table */
+		for (i = 0; i < ARRAY_SIZE(boot_os); i++)
+			if (boot_os[i] != NULL)
+				boot_os[i] += gd->reloc_off;
+
+		relocated = true;
+	}
+#endif
+	return boot_os[os];
+}
+#+end_src
+procedure
+#+begin_src c
+  +->booti  
+   +->do_booti
+    +->booti_start
+     +->do_bootm_states
+      +->bootm_start
+       +->boot_start_lmb (CONFIG_LMB) memory size initialize in images header
+      +->bootm_os_get_boot_func(images->os.os);
+    +->bootm_disable_interrupts
+    +->do_bootm_states
+     +->do_bootm_linux
+      +->boot_selected_os
+     
+#+end_src
+
+
+device remove error
+#+begin_src c
+  +->boot_selected_os
+   +->do_bootm_linux
+    +->boot_jump_linux
+     +->announce_and_cleanup
+      +->do_remove_device_flags
+       +->device_remove
+#+end_src
