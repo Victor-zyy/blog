@@ -5,7 +5,7 @@ Since we have two types of assembly language to write called INTEL Syntax used b
 The link below talks the conversion of AT&T and INTEL Syntax.
 [[http://www.delorie.com/djgpp/doc/brennan/brennan_att_inline_djgpp.html][Assembly for x86]]
 *** kern monitor
-In mit6.828 lab1, when you type *make qemu-nox* command, it will run in small and simple monitor prompt by K> in the console running on the virtual memory address.
+In mit6.828 lab1, when you type *make qemu-nox* command, it will run in small and simple monitor prompt by *K>* in the console running on the virtual memory address.
 #+begin_src 
     6828 decimal is 15254 octal!
     entering test_backtrace 5
@@ -57,12 +57,630 @@ In mit6.828 lab1, when you type *make qemu-nox* command, it will run in small an
     +------------------+  <- 0x00000000
 #+end_src
 *** Bios
-The bios resides in 0x0000F000 ~ 0x 0000FFFF memory address, occupies for 64KB region. And the storing device of bios ranges from ROM to updatable and flexible rom. After power is on, the first instruction is a long jump code in BIOS.
+The bios resides in 0x0000F000 ~ 0x 0000FFFF memory address, occupies for 64KB region. And the storing device of bios ranges from ROM to updatable and flexible rom. After power is on, the first instruction is a long jump code in BIOS. It jumps low memory in bios, for 16Bytes don't do anything more in PCs.
 #+begin_src asm
 The target architecture is set to "i8086".
 [f000:fff0]    0xffff0:	ljmp   $0xf000,$0xe05b
 #+end_src
 On processor reset, the (simulated) processor enters real mode and sets CS to 0xf000 and the IP to 0xfff0, so that execution begins at that (CS:IP) segment address. And the address is interpreted as real mode design.
+Its main task is to initialize the basic hardware like display, kbd, uart, PCI bus,etc. and map these devices in particular memory address.That is why mordern PCs have a hole in physical memory from 0x000a0000 to 0x00100000, dividing memory into low memory and extended memory, even in mordern PCs. It's a collaboration between hardware and memory address.
 *** real mode and protected mode
 Once power on, the x86 goes into real mode which can only access 1MB of low memory. The bios is the first program to run.
+**** real mode addressing
+In real mode, we use segments and offset to address in physical memory, for 1Mbyts at most. The formula is *segment * 16 + offset*.
+
+**** protected mode addressing
+GDT, cs/ds/es/ss are all segment selectors, it will select which gdt entry (gdtr to pointed to) to access, the gdt entry contains the base address of the physical memory to access, then add the offset to access the memory. In x86 protected mode, at bootstrap we set the cs/ds/.. to the same value. And the gdt entry is all the 0 address , flag bits are all set to writeable for data and readable and exectuable for code, length is 0xffffffff. So the processor can access 32bits without restriction.
+#+begin_src asm
+gdt:
+   SEG_NULL                              # null seg
+   SEG(STA_X|STA_R, 0x0, 0xffffffff)     # code seg
+   SEG(STA_W, 0x0, 0xffffffff)           # data seg
+#+end_src
 ** riscv
+*** riscv assembly language
+Refer to reference manual or a book named <RISCV-体系结构与编程>. It is a great start to write a snippet of code in qemu.
+
+* Boot Loader
+** i386
+*** after bios
+When the bios has initialized all the necessary devices, it will find a bootable floopy disk , or a hard disk. It will then read the bootloader from the disk, and tranfers control to it.
+*** MBR
+The floopy and hard disks is divided into numbers of sectors, which is the minimum granuity to read an write.If the bios find a bootable device, it will then load the first sector(512KB) in to 0x7c00 ~ 0x7dff, then jump to it. After all the mordern PCs are complicated, but these are standards.
+*** main task
+- switch from real mode to protected mode, to access the whole 4GB in 32bit machine.
+- read the kernel from device and then jump to the kernel.
+*** source code
+The boot sector code is in boot directory, but we have to limit the size of this code below 510 Bytes. The first two bytes is 0x55 0xaa to indicate the bootable device that has the MBR.
+**** boot.S
+#+begin_src asm
+  # Start the CPU: switch to 32-bit protected mode, jump into C.
+  # The BIOS loads this code from the first sector of the hard disk into
+  # memory at physical address 0x7c00 and starts executing in real mode
+  # with %cs=0 %ip=7c00.
+
+  .set PROT_MODE_CSEG, 0x8         # kernel code segment selector
+  .set PROT_MODE_DSEG, 0x10        # kernel data segment selector
+  .set CR0_PE_ON,      0x1         # protected mode enable flag
+
+  .globl start
+  start:
+    .code16                     # Assemble for 16-bit mode
+    cli                         # Disable interrupts
+    cld                         # String operations increment
+
+    # Set up the important data segment registers (DS, ES, SS).
+    xorw    %ax,%ax             # Segment number zero
+    movw    %ax,%ds             # -> Data Segment
+    movw    %ax,%es             # -> Extra Segment
+    movw    %ax,%ss             # -> Stack Segment
+
+    # Enable A20:
+    #   For backwards compatibility with the earliest PCs, physical
+    #   address line 20 is tied low, so that addresses higher than
+    #   1MB wrap around to zero by default.  This code undoes this.
+  seta20.1:
+    inb     $0x64,%al               # Wait for not busy
+    testb   $0x2,%al
+    jnz     seta20.1
+
+    movb    $0xd1,%al               # 0xd1 -> port 0x64
+    outb    %al,$0x64
+
+  seta20.2:
+    inb     $0x64,%al               # Wait for not busy
+    testb   $0x2,%al
+    jnz     seta20.2
+
+    movb    $0xdf,%al               # 0xdf -> port 0x60
+    outb    %al,$0x60
+
+    # Switch from real to protected mode, using a bootstrap GDT
+    # and segment translation that makes virtual addresses 
+    # identical to their physical addresses, so that the 
+    # effective memory map does not change during the switch.
+    lgdt    gdtdesc
+    movl    %cr0, %eax
+    orl     $CR0_PE_ON, %eax
+    movl    %eax, %cr0
+    
+    # Jump to next instruction, but in 32-bit code segment.
+    # Switches processor into 32-bit mode.
+    ljmp    $PROT_MODE_CSEG, $protcseg
+
+    .code32                     # Assemble for 32-bit mode
+  protcseg:
+    # Set up the protected-mode data segment registers
+    movw    $PROT_MODE_DSEG, %ax    # Our data segment selector
+    movw    %ax, %ds                # -> DS: Data Segment
+    movw    %ax, %es                # -> ES: Extra Segment
+    movw    %ax, %fs                # -> FS
+    movw    %ax, %gs                # -> GS
+    movw    %ax, %ss                # -> SS: Stack Segment
+    
+    # Set up the stack pointer and call into C.
+    movl    $start, %esp
+    call bootmain
+
+    # If bootmain returns (it shouldn't), loop.
+  spin:
+    jmp spin
+
+    # Bootstrap GDT
+    .p2align 2                                # force 4 byte alignment
+    gdt:
+    SEG_NULL													# null seg
+    SEG(STA_X|STA_R, 0x0, 0xffffffff)	# code seg
+    SEG(STA_W, 0x0, 0xffffffff)	      # data seg
+
+    gdtdesc:
+    .word   0x17                            # sizeof(gdt) - 1
+    .long   gdt                             # address gdt
+
+#+end_src
+
+The MBR executes the first instruction in 0x07c00 address, then It will first enable the A20 bit address which is a remaining question in history, then enable the page-on in cr0 register, and we also to set the correct value of gdt register, it is the main function to use in protected mode.
+After that, use a long jump instruction to reflush the cs register which then jump into protected mode. Finally set up the stack and run into bootmain.
+
+**** main.c
+#+begin_src c
+#define ELFHDR		((struct Elf *) 0x10000) // scratch space
+
+void readsect(void*, uint32_t);
+void readseg(uint32_t, uint32_t, uint32_t);
+
+void
+bootmain(void)
+{
+	struct Proghdr *ph, *eph;
+
+	// read 1st page off disk
+	readseg((uint32_t) ELFHDR, SECTSIZE*8, 0);
+
+	// is this a valid ELF?
+	if (ELFHDR->e_magic != ELF_MAGIC)
+		goto bad;
+
+	// load each program segment (ignores ph flags)
+	ph = (struct Proghdr *) ((uint8_t *) ELFHDR + ELFHDR->e_phoff);
+	eph = ph + ELFHDR->e_phnum;
+	for (; ph < eph; ph++)
+		// p_pa is the load address of this segment (as well
+		// as the physical address)
+		readseg(ph->p_pa, ph->p_memsz, ph->p_offset);
+
+	// call the entry point from the ELF header
+	// note: does not return!
+	((void (*)(void)) (ELFHDR->e_entry))();
+
+bad:
+	outw(0x8A00, 0x8A00);
+	outw(0x8A00, 0x8E00);
+	while (1)
+		/* do nothing */;
+}
+#+end_src
+
+The bootmain function is to read kernel from device (hd, disk) into physical memory, as we all know the kernel is linked into virtual memory address *0xF0100000*, so we first load the kernel into 0x10000. The kernel is loaded into disk as an elf format, so we first read the ELF header from the first sector of disk and then parse the header then read the loadable segment into memory device.
+
+#+begin_src 
+Elf file type is EXEC (Executable file)
+Entry point 0x10000c
+There are 2 program headers, starting at offset 52
+
+Program Headers:
+  Type           Offset   VirtAddr   PhysAddr   FileSiz MemSiz  Flg Align
+  LOAD           0x001000 0xf0100000 0x00100000 0x0f1fb 0x0f1fb R E 0x1000
+  LOAD           0x011000 0xf0110000 0x00110000 0x0a300 0x0a944 RW  0x1000
+
+ Section to Segment mapping:
+  Segment Sections...
+   00     .text .rodata .stab .stabstr 
+   01     .data .bss 
+#+end_src
+Finally use function pointer to jump to kernel physical memory.
+
+** riscv
+Actually we use qemu-virt to emulate the riscv64 arch, and when we run this machine, it first runs at the MaskROM firmware to jump pflash (XIP device). Then the bootloader is located at the flash device.
+*** memory map
+#+begin_src 
+  |---------------|-------------|-------------|------------|
+  |  bootloader   |  opensbi    |   kernel    |  rootfs    |
+  |---------------|-------------|-------------|------------|
+#+end_src
+*** main task
+As the same with i386, the bootloader loads the opensbi firmware to ddr memory, and kernel to the ddr memory, but it will first jump to opensbi firmware, in M-mode.
+- disable the interrupt
+- set up stack
+- jump bootmain
+- read from device and then jump into it
+#+begin_src asm
+	.section .text, "ax", %progbits
+	.align 3
+	.globl start
+start:
+
+	/* Mask all interrupts */
+	csrw CSR_MIE, zero
+	csrw CSR_MIP, zero
+
+	/* Setup temporary trap handler */
+	lla	s4, _start_hang
+	csrw	CSR_MTVEC, s4
+
+	#setup stack for 4096bytes
+	/* Setup stack */
+	la	a3, 0x8000
+	li	a4, 0x1000
+	add	sp, a3, a4
+
+	#initialize the DDR controller
+	call _ddr_initialize	
+
+	#jump to bootmain
+	csrr	a0, 	mhartid
+	call   bootmain
+#+end_src
+Actually in qemu, we create a temporary sram in 0x8000, which can be used in bootloader stack.
+#+begin_src c
+  [VIRT_SRAM]  =       {     0x8000,        0x8000 },
+  memory_region_init_ram(sram_mem, NULL, "riscv_virt_board.sram",
+                           memmap[VIRT_SRAM].size, &error_fatal);
+  memory_region_add_subregion(system_memory, memmap[VIRT_SRAM].base,
+                                sram_mem);
+#+end_src
+*** source code
+In bootmain function, unlike i386, it will first check whether the program section can be loaded or not, and then load it to ddr memory from pflash device. That is because the prog sections are not all loadable.
+#+begin_src c
+  void
+  bootmain(unsigned int hartid, void *fdt)
+  {
+  	struct Proghdr *ph, *eph;
+  	
+  	// function pointer refer to uboot
+  	void (*firmware_entry)(int hartid, void *fdt);
+
+  	firmware_entry = (void (*)(int, void*))SBI_FIRMWARE;
+
+  	// read 1st page off disk
+  	readblock((unsigned long) SBI_FIRMWARE, BLOCKSIZE*512, 0x80000);
+
+  	readblock((unsigned long) ELFHDR, BLOCKSIZE*8, 0x100000);
+  	// is this a valid ELF?
+  	if (ELFHDR->e_magic != ELF_MAGIC)
+  		goto bad;
+
+  	// load each program segment (ignores ph flags)
+  	ph = (struct Proghdr *) ((uint8_t *) ELFHDR + ELFHDR->e_phoff);
+  	eph = ph + ELFHDR->e_phnum;
+  	for (; ph < eph; ph++){
+  		// p_pa is the load address of this segment (as well
+  		// as the physical address)
+  	  if(ph->p_type == ELF_PROG_LOAD)
+  	    readblock(ph->p_pa, ph->p_memsz, ph->p_offset + 0x100000);
+  	}
+
+  	// call the entry point from the ELF header
+  	// note: does not return!
+  	//((void (*)(void)) (ELFHDR->e_entry))();
+  	firmware_entry(hartid, fdt);
+
+  bad:
+  	while (1)
+  		/* do nothing */;
+  }
+#+end_src
+* Kernel
+** Using virtual memory to work around position dependence
+*** i386
+In i386 we want let the kernel to run above the the high address and the user program at the lowest. Since we don't have enough space in real hardware, so we need to use mmu to walk around this problem.
+For now, we'll just map the first 4MB of physical memory, which will be enough to get us up and running. We do this using the hand-written, statically-initialized page directory and page table in kern/entrypgdir.c.
+ Once CR0_PG is set, memory references are virtual addresses that get translated by the virtual memory hardware to physical addresses. entry_pgdir translates virtual addresses in the range 0xf0000000 through 0xf0400000 to physical addresses 0x00000000 through 0x00400000, as well as virtual addresses 0x00000000 through 0x00400000 to physical addresses 0x00000000 through 0x00400000. There is a identical mapping for 0~4M to 0~4M VMA, that is because there are a few instructions running after enable the MMU.
+The i386 adopts 2-level page table translates.
+#+begin_src c
+  pte_t entry_pgtable[NPTENTRIES];
+
+  __attribute__((__aligned__(PGSIZE)))
+  pde_t entry_pgdir[NPDENTRIES] = {
+  	// Map VA's [0, 4MB) to PA's [0, 4MB)
+  	[0]
+  		= ((uintptr_t)entry_pgtable - KERNBASE) + PTE_P,
+  	// Map VA's [KERNBASE, KERNBASE+4MB) to PA's [0, 4MB)
+  	[KERNBASE>>PDXSHIFT]
+  		= ((uintptr_t)entry_pgtable - KERNBASE) + PTE_P + PTE_W
+  };
+#+end_src
+The temporary page table is set in entrypgdir.c file, this arrays are loaded in .data section when linker. After that, in kern/entry.S, it will use the physical address of entry_pgdir to initialize the CR3 register.
+#+begin_src asm
+	movl	$(RELOC(entry_pgdir)), %eax
+	movl	%eax, %cr3
+#+end_src
+After set the base pgdir address in cr3, then it will turn on paging namely turn on MMU in cr0.
+#+begin_src asm
+	movl	%cr0, %eax
+	orl	$(CR0_PE|CR0_PG|CR0_WP), %eax
+	movl	%eax, %cr0
+#+end_src
+*** riscv
+The riscv64 adopts sv48/sv39 virtual memory management, we choose the sv48 which contains 4-level page table to use. But the principle is the same.
+We are not allowed to initialize the array at compile time with non-constant value, then we use a create_page function to finish this job.
+The temporary mapping is like that.
+identical mapping [0x000080000000 - 0x000080400000] -> [0x000080000000 - 0x000080400000]
+kernel base mapping [0x000080000000 - 0x000080400000] -> [0xffffffff80000000 - 0xffffffff00400000]
+#+begin_src c
+void _page_table_first_create(void){
+
+  entry_pgdir0[0] = (((uintptr_t)entry_pgdir1) >> 2) | PTE_V;
+  entry_pgdir0[((KERNBASE + 0x8000000) & KERN_BASR_MASK) >>PDX0SHIFT]
+    = (((uintptr_t)entry_pgdir11) >> 2) | PTE_V ;
+
+  entry_pgdir1[2] = (((uintptr_t)entry_pgdir2) >> 2) + PTE_V;
+
+  entry_pgdir11[((KERNBASE + 0x80000000) & KERN_BASR_MASK1)>>PDX1SHIFT]
+    = (((uintptr_t)entry_pgdir22) >> 2)+ PTE_V;
+
+  entry_pgdir2[0]
+    = (((uintptr_t)entry_pgtable) >> 2) + PTE_V;
+  entry_pgdir2[1]
+    = (((uintptr_t)entry_pgtable1) >> 2) + PTE_V;
+
+  entry_pgdir22[0]
+    = (((uintptr_t)entry_pgtable) >> 2) + PTE_V;
+  entry_pgdir22[1]
+       = (((uintptr_t)entry_pgtable1) >> 2) + PTE_V;
+}
+#+end_src
+Then we have to set the page dir base address in satp, and turn on MMU.
+#+begin_src asm
+	lla     a6, (entry_pgdir0)
+	srli    a6, a6, 12
+	li      t0, 0
+	or      t0, t0, a6
+	li 	t1, SATP_SV48
+	or      t0, t0, t1
+	sfence.vma  // syn operation
+	csrw    CSR_SATP, t0
+#+end_src
+** format printf
+GCC changed its calling convention so that it pushed arguments on the stack in declaration order, so that the last argument is pushed last.
+** stack
+#+begin_src asm
+function:
+
+	int x = 1, y = 3, z = 4;
+	cprintf("x %d, y %x, z %d\n", x, y, z);
+disassemble:
+  14   int x = 1, y = 3, z = 4;
+  13   unsigned int i = 0x00646c72;
+  12 f0100763: c7 45 e4 72 6c 64 00  movl   $0x646c72,-0x1c(%ebp)
+  11   cprintf("x %d, y %x, z %d\n", x, y, z);
+  10 f010076a: 6a 04                 push   $0x4
+   9 f010076c: 6a 03                 push   $0x3
+   8 f010076e: 6a 01                 push   $0x1
+   7 f0100770: 68 6e 1b 10 f0        push   $0xf0101b6e
+   6 f0100775: e8 85 01 00 00        call   f01008ff <cprintf>
+#+end_src
+before call the stack will push arguments onto the stack. Because the stack on x86 pc grows down.
+So the stack will be like that after push
+#+begin_src 
+                        +------------+
+                        | 	0x04  |
+                        +------------+
+                        | 	0x03  |
+                        +------------+
+                        | 	0x01  |
+                        +------------+
+                        | 0xf0101b6e |
+                        +------------+  <-----esp  0xf0109f60
+#+end_src
+After pushed all the args on the stack, the compiler will push the return address on the stack, and the move the call function address to eip, then jump into the function.
+#+begin_src 
+    %eip points at first instruction of function
+    %esp+4 points at first argument
+    %esp points at return address 
+
+                +------------+
+                | 	0x04  |
+                +------------+
+                | 	0x03  |
+                +------------+
+                | 	0x01  |
+                +------------+
+                | 0xf0101b6e |	
+                +------------+  <------ first argument string address
+                | 0xf010077a |
+                +------------+  <------ return address esp:0xf0109f5c
+#+end_src
+
+Enter function:
+#+begin_src
+   6 f01008ff: 55                    push   %ebp
+   5 f0100900: 89 e5                 mov    %esp,%ebp
+   4 f0100902: 83 ec 10              sub    $0x10,%esp
+
+                +------------+
+                | 	0x04  |
+                +------------+
+                | 	0x03  |
+                +------------+
+                | 	0x01  |
+                +------------+
+                | 0xf0101b6e |	
+                +------------+  <------ first argument string address
+                | 0xf010077a |
+                +------------+  <------ return address
+                | 	%ebp  |		%ebp = 0xf0109fd8
+                +------------+  <------ %ebp	after mov %esp, %ebp
+                | local_var  |	\
+                +------------+	 |--> 0x10(16 bytes)
+                |    ....    |	/
+                +------------+  <------ new %esp: 0xf0109f48
+#+end_src
+After calling the cprintf, the function will call another vcprintf function and does the same thing like above.
+#+begin_src
+   8 f0100905: 8d 45 0c              lea    0xc(%ebp),%eax
+   7   cnt = vcprintf(fmt, ap);
+   6 f0100908: 50                    push   %eax
+   5 f0100909: ff 75 08              push   0x8(%ebp)
+   4 f010090c: e8 c8 ff ff ff        call   f01008d9 <vcprintf>
+   3   va_end(ap);
+   2 
+   1   return cnt;
+   5 }
+   4 f0100911: c9                    leave
+   3 f0100912: c3                    ret
+
+
+                    +------------+
+                    |    0x04    |
+                    +------------+
+                    |    0x03    |
+                    +------------+
+                    |    0x01    |
+                    +------------+	addr:0xf0109f64
+                    | 0xf0101b6e |	
+                    +------------+  <------ first argument string address
+                    | 0xf010077a |
+                    +------------+  <------ return address
+                    |    %ebp    |
+                    +------------+  <------ %ebp	after mov %esp, %ebp
+                    | local_var  |	\
+                    +------------+	 |--> 0x10(16 bytes)
+                    |    ....    |	/
+                    +------------+  
+                    |    %eax    | %eax = 0xf0109f64
+                    +------------+  
+                    | 0xf0101b6e |
+                    +------------+  
+                    |    %eip    |  leave instruction
+                    +------------+  <------ %esp
+#+end_src
+Besides doing all of that, the vcprintf will call format function to do the format-vcprintfmt.
+
+#+begin_src 
+
+  22 int
+  21 vcprintf(const char *fmt, va_list ap)
+  20 {
+  19 f01008d9: 55                    push   %ebp
+  18 f01008da: 89 e5                 mov    %esp,%ebp
+  17 f01008dc: 83 ec 18              sub    $0x18,%esp
+  16   int cnt = 0;
+  15 f01008df: c7 45 f4 00 00 00 00  movl   $0x0,-0xc(%ebp)
+  14 
+  13   vprintfmt((void*)putch, &cnt, fmt, ap);
+  12 f01008e6: ff 75 0c              push   0xc(%ebp)
+  11 f01008e9: ff 75 08              push   0x8(%ebp)
+  10 f01008ec: 8d 45 f4              lea    -0xc(%ebp),%eax
+   9 f01008ef: 50                    push   %eax
+   8 f01008f0: 68 c6 08 10 f0        push   $0xf01008c6
+   7 f01008f5: e8 d4 03 00 00        call   f0100cce <vprintfmt>
+   6   return cnt;
+   5 }
+   4 f01008fa: 8b 45 f4              mov    -0xc(%ebp),%eax
+   3 f01008fd: c9                    leave
+   2 f01008fe: c3                    ret
+
+stack-map:
+
+                +------------+
+                | 	0x04  |
+                +------------+
+                | 	0x03  |
+                +------------+
+                | 	0x01  |
+                +------------+  addr:0xf0109f64
+                | 0xf0101b6e |	
+                +------------+  <------ first argument string address
+                | 0xf010077a |
+                +------------+  <------ return address
+                | 	%ebp  |
+                +------------+  <------ %ebp	after mov %esp, %ebp
+                | local_var  |   \
+                +------------+    |--> 0x10(16 bytes)
+                |    ....    |   /
+                +------------+  
+                |    %eax    |  %eax = 0xf0109f64
+                +------------+  
+                | 0xf0101b6e |
+                +------------+  
+                |    %eip    |  leave instruction 0xf0100911
+                +------------+  
+                |    %ebp    | 
+                +------------+  <------ %ebp	after mov %esp, %ebp 0xf0109f38
+                | local_var  |  \
+                +------------+   |-->0x18 somewhere stores cnt variable address
+                |    ....    |  /
+                +------------+  
+                | 0xf0109f64 | ap points at va_arg start address
+                +------------+  
+                | 0xf0101b6e | fmt address which means string starts address
+                +------------+  
+                | 0xf0109f2c | cnt address but on the stack	0xf0109f2c
+                +------------+  
+                | 0xf01008c6 | putch function address
+                +------------+  
+                |   %eip     | 0xf01008fa
+                +------------+  
+                |   %ebp     | 0xf0109f38
+                +------------+ <------	%ebp
+                |   %edi     |
+                +------------+
+                |   %esi     |
+                +------------+
+                |   %ebx     |
+                +------------+ <------
+                | local_var  |   \
+                +------------+   |--> 0x2c
+                |    ....    |   /
+                +------------+  <------ %esp
+#+end_src
+当函数执行完成之后，dump掉局部变量`lea -0xc(%ebp), %esp`
+随后将之前使用的寄存器弹出，即`pop %ebx pop %esi pop %edi pop %ebp`
+最后`ret`指令结束函数调用，返回eip指针所指向的地址。
+当多个函数出现递推调用时就会把eip指向嵌套函数之前的地址，随后重复执行以上流程，直到函数完全退出为止。
+** backtrace
+if we wanna use stack backtrace we have to enable the option -fno-omit-fram-pointer, which will use ebp in x86 and fp in riscv to trace the stack calling conventions.
+*** i386
+The 32bit i386 is different from x86_64 and riscv, the first use stack to pass args and the latter use registers to pass instead of stack, but when the args exceed a particular number it will use stack.
+Here is the image of i386 stack frame when calling functions.
+[[file::./static/ZynexOS/images/1_i386_stack.png]]
+*** riscv
+The riscv use args to pass arguments, a0~a7 to pass from the leftmost to the rightmost.
+here is the stack frame below.
+#+begin_src
+   ffffffff8020022c:       1141                    addi    sp,sp,-16
+   ffffffff8020022e:       e406                    sd      ra,8(sp)
+   ffffffff80200230:       e022                    sd      s0,0(sp)
+   ffffffff80200232:       0800                    addi    s0,sp,16
+#+end_src
+[[file::./static/ZynexOS/images/1_riscv_tack.png]]
+*** mon_backtrace
+**** i386
+#+begin_src c
+    int
+    mon_backtrace(int argc, char **argv, struct Trapframe *tf)
+    {
+      int i = 0;
+      uint32_t ebp = read_ebp();
+      uint32_t eip;
+      uint32_t args[5];
+      struct Eipdebuginfo info;
+      cprintf("Stack backtrace:\n");
+      do{
+          eip = *(uint32_t *)(ebp + 4);
+          for(i = 0; i < 5; i++){
+                  args[i] = *(uint32_t *)(ebp + 4 * (i + 2));
+          }
+          cprintf("    ebp %08x eip %08x args %08x %08x %08x %08x %08x\n", ebp, eip, args[0], args[1], args[2], args[3], args[4]);
+          debuginfo_eip(eip, &info);
+          cprintf("        %s:%d: %.*s+%d\n", info.eip_file, info.eip_line,     info.eip_fn_namelen, info.eip_fn_name, eip - info.eip_fn_addr);
+  	ebp = *(uint32_t *)ebp;
+    }while(ebp != 0);
+    return 0;
+  }
+
+#+end_src
+The iteration will end the loop until the ebp is zero, the ebp is set to zero in kern/entry.S before enter the c code so that the backtrace will end successfully.
+#+begin_src asm
+	# Clear the frame pointer register (EBP)
+	# so that once we get into debugging C code,
+	# stack backtraces will be terminated properly.
+	movl	$0x0,%ebp			# nuke frame pointer
+#+end_src
+**** riscv
+The riscv do the same thing as i386 except for no debug info, and args.
+#+begin_src asm
+	# Clear the frame pointer register (EBP)
+	# so that once we get into debugging C code,
+	# stack backtraces will be terminated properly.
+	# nuke frame pointer ;FIXME: fp pointer
+	mv	fp, zero
+#+end_src
+note to say, we use riscv64 arch.
+#+begin_src c
+int
+mon_backtrace(int argc, char **argv, struct Trapframe *tf)
+{
+	// Your code here.
+	uint64_t fp = read_fp();
+	uint64_t ra;
+	cprintf("Stack backtrace:\n");
+	do{
+		ra = *(uint64_t *)(fp - 8);
+		cprintf("fp : 0x%08lx  ra/pc : 0x%08lx\n", fp, ra);
+		// 80386 use stack to pass args but riscv use regs to pass args
+		//As the riscv gcc doesn't support gstabs, so we need to fix it later!
+		//debuginfo_eip(eip, &info);
+		//cprintf("        %s:%d: %.*s+%d\n", info.eip_file, info.eip_line, info.eip_fn_namelen, info.eip_fn_name, eip - info.eip_fn_addr);
+		fp = *(uint64_t *)(fp - 16);
+	}while(fp != 0);
+
+	return 0;
+}
+#+end_src
+
+* debug_info
+** TODO stabs
+** TODO dwarf
+
