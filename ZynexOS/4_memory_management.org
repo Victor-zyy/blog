@@ -1,12 +1,449 @@
 * Memory Management
 ** component
 The memory management consists of two things, one for *physical memory allocator* for the kernel, so that the kernel can allocate memory and later free it. The granuity of memory we allocate at once will be one page(4096 bytes). Our job is to maintain data structures that record which physical pages are free and which are allocated, and how many processors are sharing the each allocated page.
-The second memory management is virtual memory, which maps the virtual addresses used by kernel and user software to addresses in physical memory. The MMU hardware unit preforms the mapping when load/store or executes the instructions.
+The second memory management is *virtual memory*, which maps the virtual addresses used by kernel and user software to addresses in physical memory. The MMU hardware unit preforms the mapping when load/store or executes the instructions.
 ** get memory size
 *** i386
  kern/kclock.c and kern/kclock.h manipulate the PC's battery-backed clock and CMOS RAM hardware, in which the BIOS records the amount of physical memory the PC contains, among other things.
+ #+begin_src c
+   static int
+   nvram_read(int r)
+   {
+   	return mc146818_read(r) | (mc146818_read(r + 1) << 8);
+   }
+
+   static void
+   i386_detect_memory(void)
+   {
+   	size_t basemem, extmem, ext16mem, totalmem;
+
+   	// Use CMOS calls to measure available base & extended memory.
+   	// (CMOS calls return results in kilobytes.)
+   	basemem  = nvram_read(NVRAM_BASELO);
+   	extmem   = nvram_read(NVRAM_EXTLO);
+   	ext16mem = nvram_read(NVRAM_EXT16LO) * 64;
+   }
+ #+end_src
+ Actually, we don't have to go in details about the driver for mc146818, we have to admit that it gives us the actual memory to use.
 *** riscv
 Actually we have two ways to get the actual physical memory address and size.
 - fdt parse
 - opensbi - sbi_ecall
 I choose the latter one, since we want our kernel simple at first, but later on we may reuse the fdt tree to get it around.
+In opensbi firmware, it will use fdt tree to get to know the main detail things about the soc, like cpu cluster, bus, memory, flash, peripherals. etc.
+#+begin_src shell
+  memory@80000000 {
+          device_type = "memory";
+          reg = <0x00000000 0x80000000 0x00000000 0x40000000>;
+  };
+#+end_src
+And we need to add two sbi_ecall to get the memory size in total.
+#+begin_src c
+#define SBI_EXT_BASE_GET_MEMSTART		0x8
+#define SBI_EXT_BASE_GET_MEMEND			0x9
+#+end_src
+Then add sbi_mem_init function to help parse the fdt tree in sbi_init, when starts up.
+#+begin_src c
+
+uint64_t mem_addr;
+uint64_t mem_size;
+
+static int sbi_mem_init(unsigned long *addr, unsigned long* size)
+{
+
+	int coff;
+	void *fdt = sbi_scratch_thishart_arg1_ptr();
+
+	/* Find offset of node pointed by stdout-path */
+	coff = fdt_path_offset(fdt, "/memory");
+	if(-1 < coff){
+	  return fdt_get_node_addr_size(fdt, coff, addr, size);
+	}
+	return 0;
+}
+#+end_src
+In the related sbi_ecall_base.c file , add additional funcid to support the ecall when we call from S-mode.
+#+begin_src c
+case SBI_EXT_BASE_GET_MEMSTART:
+        *out_val = mem_addr;
+        break;
+case SBI_EXT_BASE_GET_MEMEND:
+        *out_val = mem_size;
+        break;
+#+end_src
+However, since we know the whole size of the memory, but not all of it are useable, the firmware resides in 0x80000000 grows upward are not used when in S-mode kernel. So we have to solve this problem, the most efficient way to handle this is to add another two sbi_ecall functions
+#+begin_src c
+
+    case SBI_EXT_FIRMWARE_START:
+            scratch = sbi_scratch_thishart_ptr();
+            *out_val = scratch->fw_start;
+        break;
+
+    case SBI_EXT_FIRMWARE_END:
+            struct sbi_domain * dom = sbi_domain_thishart_ptr();
+            struct sbi_domain_memregion * reg= dom->regions;
+            long rstart = reg->base;
+            long rend = (reg->order < __riscv_xlen) ?
+                    rstart + ((1UL << reg->order) - 1) : -1UL;
+            *out_val = rend;
+        break;
+#+end_src
+
+The way we write it so complicated is that, the sbi_domain root won't destroy when you are doing memory management, that's because opensbi may allocate firmware in M-mode, and the memory grows above the opensbi firmware size. So the bottom line of the firmware end may be the root domain end address.
+
+** memory management
+*** methodology
+The jos and zynexos use memory management like that, each page (4K) has one data structure mapped to it.The whole memory we get above we be mapped Mem/4k npages. The we use a linked-list to manage the mapping structure. If we need a page we use page_alloc which allocates a page from the linked-list.
+And how we get the physical memory address if we got  a number of page. Since the data structures array physical memory address are known, then we got a number, we add 4k * num + pages(array_base), then we get the physical address. However, the pages(array_base) need subtract the KERNBASE to get the real physical address.
+#+begin_src c
+  pages = (struct PageInfo *)boot_alloc(sizeof(struct PageInfo) * npages);
+  memset(pages, 0 , sizeof(struct PageInfo) * npages);	
+
+  static inline physaddr_t
+  page2pa(struct PageInfo *pp)
+  {
+    return (pp - pages) << PGSHIFT;
+  }
+
+#+end_src
+Known that, boot_alloc is used when boot up in the kernel, it will allocate memory up above the end[] symbol, it is virtual memory address. But how  it can access beyond the end[] symbol.
+*** tempory pgdir
+**** i386
+#+begin_src asm
+	# We haven't set up virtual memory yet, so we're running from
+	# the physical address the boot loader loaded the kernel at: 1MB
+	# (plus a few bytes).  However, the C code is linked to run at
+	# KERNBASE+1MB.  Hence, we set up a trivial page directory that
+	# translates virtual addresses [KERNBASE, KERNBASE+4MB) to
+	# physical addresses [0, 4MB).  This 4MB region will be
+	# sufficient until we set up our real page table in mem_init
+	# in lab 2.
+
+	# Load the physical address of entry_pgdir into cr3.  entry_pgdir
+	# is defined in entrypgdir.c.
+	movl	$(RELOC(entry_pgdir)), %eax
+	movl	%eax, %cr3
+	# Turn on paging.
+	movl	%cr0, %eax
+	orl	$(CR0_PE|CR0_PG|CR0_WP), %eax
+	movl	%eax, %cr0
+#+end_src
+It creates the tempory page_dir in kern/entrypgdir.c file, this is used for mmu temporarily, and later on after mem_init, the kern_pgdir is used for real kern. 
+**** riscv
+Riscv does the same thing as i386, but riscv use sv48 4-level page, so the tempory pgdir might be a little complicated. So, I write a function to initialize the pgdir before goes into mem_init.
+#+begin_src asm
+	# We haven't set up virtual memory yet, so we're running from
+	# the physical address the boot loader loaded the kernel at: 1MB
+	# (plus a few bytes).  However, the C code is linked to run at
+	# KERNBASE+1MB.  Hence, we set up a trivial page directory that
+	# translates virtual addresses [KERNBASE, KERNBASE+4MB) to
+	# physical addresses [0x80000000, 4MB).  This 4MB region will be
+	# sufficient until we set up our real page table in mem_init
+	# in lab 2.
+
+	# Set the stack pointer
+	lla     t0, bootstacktop
+	add	sp, t0, zero
+
+	# Load the physical address of entry_pgdir into cr3.  entry_pgdir
+	# is defined in entrypgdir.c.
+	// temp page table for temp use
+	call    _page_table_first_create
+#+end_src
+After set up the pgdir, the kern in mem_init can access the end[] symbol memory above.
+*** data structure
+#+begin_src c
+struct PageInfo {
+	// Next page on the free list.
+	struct PageInfo *pp_link;
+
+	// pp_ref is the count of pointers (usually in page table entries)
+	// to this page, for pages allocated using page_alloc.
+	// Pages allocated at boot time using pmap.c's
+	// boot_alloc do not have valid reference count fields.
+	uint16_t pp_ref;
+};
+#+end_src
+Memory link, use linked-list, so we need a node called pp_link to link this pages struct up.
+[[file::./static/ZynexOS/images/4_page_linked_list.png]]
+*** memory management diagram
+**** i386
+[[file::./static/ZynexOS/images/4_i386_memory_management.png]]
+**** riscv
+[[file::./static/ZynexOS/images/4_riscv_memory_management.png]]
+The i386 arch is different from riscv as we explained in the former posts..
+
+** MMU
+*** i386
+In i386 real mode, the addressing mode is segment << 4 + offset.
+In i386 protected mode, the addressing mode is GDT[cs] + offset which calculates the linear address, if we don't turn pageing mode in cr0 register, the linear address is physical addres.
+But after we turn on the Page Enable bit in cr0, the linear address is virtual address, and then needed to be translated into physical memory address with MMU unit.
+i386 adopts 2-level page address translation. Here is the picture to illustrate the tranlation.
+[[file::./static/ZynexOS/images/4_i386_mmu.png]]
+The pte entry of each bit can be explained online or on x86 manual. Note: when the PDE entry set the attributes it will take effect when the mmu looks up, for example, if the PDE entry is set PTE_U for user, then all the PTEs for this PDE will be PTE_U attribute. This differs from riscv MMU.
+The PTE entry bit explained here, I refered it from cs240.And the link is below.
+[[https://courses.grainger.illinois.edu/cs240/sp2021/notes/paging/pageTableEntry.html][cs240_x86_pte_entry]]
+- The P bit, located as PTE[0], is the “Present” bit. If the present bit is set, the page is available in RAM. If the present bit is not set, a page fault occurs and the operating system reads the data from storage into RAM before continuing.
+- The A[2] bits, located at PTE[9] and PTE[10], are two “Available” bits used by the operating system to track if the page has been accessed. These bits can be used to implements a LRU, LFU, or other page eviction algorithm.
+- The D bit, located at PTE[6], is the “Dirty” bit used to describe if the page has been written to. If the dirty bit is off, the page has not been modified since it was loaded into RAM and does not need to be saved (it’s contents is the same as it was in storage, and may just be overwritten).
+- The U bit, located at PTE[2], is the “User” bit. If the user bit is off, only the operating system itself can access the page. If a user process tries to access this page, an exception within the CPU will be thrown.
+- The R bit, located at PTE[1], is the “Read/Write” bit. If the read/write bit is set, the page can be written to. If the read/write bit is not set, the page may only be read from (and not written to). (This provides additional safety to ensure that the program’s code is never changed once it’s loaded into memory to prevent various security exploits.)
+*** riscv
+The sv48/sv39 means that we only use 48 bits of a virtual address even though the memory access bus is 64 bits. I will illustrate the sv48 in detail. sv48 use [47:0] as the virtual address to use, so the [48] bit must be 0 or 1, and the reserve bits above 48 will be equal 48. In this way, the virtual memory address can be divided into two spaces on the top [0xffff000000000000 ~ 0xffffffffffffffff], and on the bottom [0x0000~ 0x0000ffffffffffff].
+And the sv48 use 4-level page table, so there might be large page for 2MB, or 1GB. if the PDX is the leaf node.Below is the riscv MMU control process.
+[[file::./static/ZynexOS/images/4_riscv_mmu.png]]
+The PTE entry divides two forms, one for leaf node, and the none-leaf node. If the PTE_V bit is valid, and the RWX bits are all zero, it means the PPN is the next-PPN to search, so the mmu will look up the next page. If the PTE_V bit is zero indicating the this is a empty/none-effective entry.
+
+The PTE entry bit explained here, I refered it from <riscv 体系结构与编程>.
+- PTE_V valid or note
+- PTE_R readable or not
+- PTE_W writeable or not
+- PTE_X executable or not
+- PTE_U user to access or not
+- PTE_G global bit used in TLB.
+- PTE_A Accessed or not
+- PTE_D dirty
+- RSW reserved maybe COW
+- PMBT
+  0: none
+  1: for normal memory cache disable thin memory consistence
+  2: for IO memory cache disable strong memory consistence
+
+  Note: When the PTE_R is not set, when you use ld instruction , it will cause load page fault.
+
+** memory function
+*** pgdir_walk
+Helper function to find the PTE entry address, it will create page_directory when the create flag is set. And if the page entry address is not found, then return NULL. Many functions use this function to do a lot of things. Like page_insert ,boot_map_region.
+**** i386
+#+begin_src c
+pte_t *
+pgdir_walk(pde_t *pgdir, const void *va, int create)
+{
+	// Fill this function in
+	
+	// 2.handle the mistakes that might occur
+	if(create == false){
+        if(pgdir[PDX(va)] == 0){
+                return NULL;
+        }else{
+                //return virtual address
+                return (pte_t *)KADDR(PTE_ADDR(pgdir[PDX(va)])) + PTX(va);
+        }
+}else {
+        if(pgdir[PDX(va)]){
+                //return virtual address
+                return (pte_t *)KADDR(PTE_ADDR(pgdir[PDX(va)])) + PTX(va);
+        }
+        // 1.succeed
+        // 1). allocate new page
+        struct PageInfo *pg_info = page_alloc(ALLOC_ZERO);	
+        if(pg_info == NULL){
+                        //page_alloc error
+                        return NULL;
+        }
+        pg_info->pp_ref ++;	
+        // 2). get the physical page it refers to (PageInfo)
+        physaddr_t paddr =  page2pa(pg_info);
+        uintptr_t vaddr = (uintptr_t)KADDR(paddr);
+        // 3). insert to page_directory using some permission bits
+        pgdir[PDX(va)] = paddr | PTE_W | PTE_U | PTE_P;
+        // Question: why PDE entry is user enabled , that's because two barriers to block user to access for PTE is not allowed
+        // 0x002 | 0x020 | 0x004 | 0x001 = 0x063
+
+        return (pte_t *)vaddr + PTX(va);
+	}
+	return NULL;
+}
+#+end_src
+**** riscv
+In riscv we use 4K page by default, and create 4-level page dirs when necessary. Later on, we will expand it to support more types of pages like 2M.
+#+begin_src c
+// helper function to helo pgdir_walk to find whether or not the pte exsists
+static bool
+pgdir_walk_through(pde_t *pgdir, const void *va, pte_t **PTE){
+  // as we all know the pgdir is virtual memory so we can access it
+  if((pgdir[PD0X(va)] & PTE_V) == 0){
+    return false;
+  }
+  // Now we temoprary don't use large page actually
+  physaddr_t paddr =  PDE_PHY(pgdir[PD0X(va)]);
+  pgdir = (pde_t *)KADDR(paddr);
+  if(((pgdir[PD1X(va)]) & PTE_V) == 0) {
+    return false;
+  }
+
+  paddr =  PDE_PHY(pgdir[PD1X(va)]);
+  pgdir = (pde_t *)KADDR(paddr);
+  if(((pgdir[PD2X(va)]) & PTE_V) == 0) {
+    return false;
+  }
+  // if PD2X exitst, just return the PTE entry address
+  *PTE = (pte_t *)KADDR(PDE_PHY(pgdir[PD2X(va)])) + PTX(va);
+  return true;
+}
+
+static pte_t*
+pgdir_create_page_level(pde_t *pgdir, const void *va){
+   // 1). allocate new page
+  struct PageInfo *pg_info = page_alloc(ALLOC_ZERO);	
+  //page_alloc error
+  if (pg_info == NULL){
+    return NULL;
+  }
+  pg_info->pp_ref ++;	
+  // 2). get the physical page it refers to (PageInfo)
+  physaddr_t paddr_ =  page2pa(pg_info);
+
+  if((pgdir[PD0X(va)] & PTE_V) == 0){
+    pgdir[PD0X(va)] = PDE_ENTRY(paddr_) | PTE_V;
+    pg_info = page_alloc(ALLOC_ZERO);	
+    if (pg_info == NULL){
+	return NULL;
+    }
+    pg_info->pp_ref ++;	
+    paddr_ =  page2pa(pg_info);
+  }
+  physaddr_t paddr = PDE_PHY(pgdir[PD0X(va)]);
+  pgdir = (pde_t *)KADDR(paddr);
+
+  if((pgdir[PD1X(va)] & PTE_V) == 0){
+    pgdir[PD1X(va)] = PDE_ENTRY(paddr_) | PTE_V;
+    pg_info = page_alloc(ALLOC_ZERO);	
+    if (pg_info == NULL){
+	return NULL;
+    }
+    pg_info->pp_ref ++;	
+    paddr_ =  page2pa(pg_info);
+  }
+
+  paddr = PDE_PHY(pgdir[PD1X(va)]);
+  pgdir = (pde_t *)KADDR(paddr);
+
+  if((pgdir[PD2X(va)] & PTE_V) == 0){
+    pgdir[PD2X(va)] = PDE_ENTRY(paddr_) | PTE_V;
+  }
+  return (pte_t *)KADDR(PDE_PHY(pgdir[PD2X(va)])) + PTX(va);
+}
+#+end_src
+In reality we use 2 helper functions to help us to find the pte address.
+#+begin_src c
+pte_t *
+pgdir_walk(pde_t *pgdir, const void *va, int create)
+{
+    // Fill this function in
+    // 2.handle the mistakes that might occur
+    pde_t *PTE = NULL;
+    bool ret = pgdir_walk_through(pgdir, va, &PTE);
+    if(ret)
+	return PTE;
+    if(!create)
+	return NULL;
+    if(create){
+      return pgdir_create_page_level(pgdir, va);
+    }
+    return NULL;
+}
+#+end_src
+*** page_remove
+The page_remove function will deallocate the page to page_free_list, but note we have to invalidate the tlb when we free a page, that's because the virtual address must be accessed. It will call the page_decref function to decrease the pp_ref count, if it counts down to zero, page_free will be called to deallocate to page_free_list.
+#+begin_src c
+void
+page_remove(pde_t *pgdir, void *va)
+{
+	// Fill this function in
+	pte_t *p_pte = NULL;
+	struct PageInfo *pg_info = page_lookup(pgdir, va, &p_pte);
+	
+	if(pg_info == NULL){
+		//silently does nothing
+		return;
+	}		
+	// decrement the pp_ref if it counts to zero then free it out
+	page_decref(pg_info);
+
+	// if such a PTE exist then the pte entry must be set to 0
+	if(p_pte){
+			*p_pte = 0;
+	}
+	
+	// The TLB must be invalidated if you remove an entry from page table
+	tlb_invalidate(pgdir, va);
+					
+}
+#+end_src
+
+*** page_free
+#+begin_src c
+void
+page_decref(struct PageInfo* pp)
+{
+    if (--pp->pp_ref == 0)
+            page_free(pp);
+}
+
+void
+page_free(struct PageInfo *pp)
+{
+	// Fill this function in
+	// Hint: You may want to panic if pp->pp_ref is nonzero or
+	// pp->pp_link is not NULL.
+	if(pp->pp_ref != 0){
+		panic("pp_ref is none zero, Please check!\n");
+	}
+
+	if(pp->pp_link != NULL){
+		panic("pp_link is not null, Please check!\n");
+	}
+	
+	//return to the page_free_list;
+	pp->pp_link = page_free_list;
+	page_free_list = pp;
+}
+#+end_src
+*** tlb_invalidate
+**** i386
+#+begin_src c
+   static inline void
+   invlpg(void *addr)
+   {
+       asm volatile("invlpg (%0)" : : "r" (addr) : "memory");
+   }
+  //
+  // Invalidate a TLB entry, but only if the page tables being
+  // edited are the ones currently in use by the processor.
+  //
+  void
+  tlb_invalidate(pde_t *pgdir, void *va)
+  {
+  	// Flush the entry only if we're modifying the current address space.
+  	// Flush the entry only if we're modifying the current address space.
+  	// For now, there is only one address space, so always invalidate.
+  	invlpg(va);
+  }
+#+end_src
+**** riscv
+#+begin_src c
+  
+//
+// Invalidate a TLB entry, but only if the page tables being
+// edited are the ones currently in use by the processor.
+//
+
+static inline void local_flush_tlb_page_asid(unsigned long addr,
+                 unsigned long asid)
+{
+         __asm__ __volatile__ ("sfence.vma %0, %1"
+                         :
+                         : "r" (addr), "r" (asid)
+                         : "memory");
+}
+
+void
+tlb_invalidate(pde_t *pgdir, void *va)
+{
+	// Flush the entry only if we're modifying the current address space.
+	// For now, there is only one address space, so always invalidate.
+  pgdir = pgdir; /* FIXME: in case of warning */
+  local_flush_tlb_page_asid(ROUNDDOWN((unsigned long)va, PGSIZE), read_asid());
+}
+#+end_src
