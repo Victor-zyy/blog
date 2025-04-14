@@ -1,24 +1,64 @@
+* PIC
+PIC (Position Independent Code), gcc compile option -fpic, if it enables, all the codes use relative addresses, not the absolute addresses. If it is gonna use the absolute address, it will ues GOT(Global Offset Table) to access. In riscv/x86, it is common to use.
+** riscv
+- la rd, symbol (no pic)
+  (auipc rd, delta[31:12] + delta[11]    addi rd, rd, delta[11:0])
+  which delta = symbol - pc, relative address
+- la rd, symbol (pic)
+  (auipc rd, delta[31:12] + delta[11]    l{w/d} rd, delta[11:0](rd))
+  which delta = GOT[symbol] - pc, relative address
+- lla rd, symbol (the same with pic and no-pic)
+  (load symbol local address)
+  ( auipc rd, delta[31:12] + delta[11] l{w/b/d/h} rd, delta[11:0])
+  which delta = symbol - pc
+  
+  example:
+#+begin_src asm
+    // -fpic link address is 0xffffffff80200000
+    	la  a2, jump_relocated
+    jump_relocated:
+    // disassembly
+  ffffffff80200040:	00004617          	auipc	a2,0x4
+  ffffffff80200044:	76863603          	ld	a2,1896(a2) # ffffffff802047a8 <_GLOBAL_OFFSET_TABLE_+0x10>
+    	
+#+end_src
+There is no GOT symbol.
+#+begin_src asm
+	la  	a2, jump_relocated
+ffffffff80200040:	00000617          	auipc	a2,0x0
+ffffffff80200044:	00a60613          	addi	a2,a2,10 # ffffffff8020004a <jump_relocated>
+	jr 	a2
+ffffffff80200048:	8602                	jr	a2
+#+end_src
+** x86
+When I compile the mit6.828 code to run using make, it will propmt error when I run the kernel. I serached around to find a solution, one blog says just disable the -fno-pic configuration.After doing that, the kernel runs successfully. Now, after several months, the bug doesn't appear, but the code is running ok with -fpic.
 * bug reporting
 ** mtvec/stvec alignment
+The mtvec register is an MXLEN-bit WARL read/write register that holds trap vector configuration, consisting of a vector base address (BASE) and a vector mode (MODE).
+The stvec register is an SXLEN-bit read/write register that holds trap vector configuration, consisting of a vector base address (BASE) and a vector mode (MODE).
+It says that The value in the BASE field must always be aligned on a 4-byte boundary, and the MODE setting may impose additional alignment constraints on the value in the BASE field.
+*** Mode Direct
 In the reference manual, you can set the xvec in two different modes, the most usally one we use is first one, but we need 4 bytes aligned.
-** la instruction
+*** Mode Vectored
+When the interrupts or exceptions come, the pc will jump into (Base + 4 * cause). Which means that, the BASE field will have to 256-bytes aligned.
+** sfence.vma
+
 
 * jump VMA
 ** ret
 #+begin_src asm
       call    relocated
-
   	.align 3
   relocated:
   	/* Relocate return address */
   	la 	t0, kernel_base
   	ld	a1, 0(t0)
-  	add 	ra, ra, a1
+  	add ra, ra, a1
 
   	/* Point stvec to virtual address of intruction after satp write */
   	la 	a2, 1f
   	add	a2, a2, a1
-  	csrw 	CSR_STVEC, a2
+  	csrw CSR_STVEC, a2
   	
   	/* Compute satp for kernel page tables, but don't load it yet */
   	lla     a6, (entry_pgdir0)
@@ -38,7 +78,8 @@ In the reference manual, you can set the xvec in two different modes, the most u
 
   	ret
 #+end_src
-** jr jump instruction
+The code I write is from linux-kernel, arch/riscv/kernel/head.S. Actually in linux-kernel, when the satp is set, and immediately the next instruction will force into a exception trap handler, where set 1f above in stvec. I guess, it may happen when the entry_pgdir didn't contain the mapping for head.S, it need to check in the mm management before.
+** jr jump instruction fno-pic
 #+begin_src asm
     	lla     a6, (entry_pgdir0)
     	srli    a6, a6, 12
@@ -63,10 +104,9 @@ In the reference manual, you can set the xvec in two different modes, the most u
   kernel_base:	
   	.dword	KERNBASE
 #+end_src
-
-
+After setting up the entry_pgdir, I load the VMA_base from .data section stored in memory. Then add the offest of the jump_relocated, and jump VMA. This code is specially for fno-pic.
 ** jr with fpic option
-we can just jump to the VMA very nice
+we can just jump to the VMA very nice, with pic, we can load the absolute address use the la instruction, which load the address from GOT.
 #+begin_src asm
 	la  	a2, jump_relocated
 	jr 	a2
