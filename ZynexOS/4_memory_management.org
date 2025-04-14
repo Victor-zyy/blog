@@ -1,0 +1,12 @@
+* Memory Management
+** component
+The memory management consists of two things, one for *physical memory allocator* for the kernel, so that the kernel can allocate memory and later free it. The granuity of memory we allocate at once will be one page(4096 bytes). Our job is to maintain data structures that record which physical pages are free and which are allocated, and how many processors are sharing the each allocated page.
+The second memory management is virtual memory, which maps the virtual addresses used by kernel and user software to addresses in physical memory. The MMU hardware unit preforms the mapping when load/store or executes the instructions.
+** get memory size
+*** i386
+ kern/kclock.c and kern/kclock.h manipulate the PC's battery-backed clock and CMOS RAM hardware, in which the BIOS records the amount of physical memory the PC contains, among other things.
+*** riscv
+Actually we have two ways to get the actual physical memory address and size.
+- fdt parse
+- opensbi - sbi_ecall
+I choose the latter one, since we want our kernel simple at first, but later on we may reuse the fdt tree to get it around.
