@@ -1,0 +1,229 @@
+* User Environment
+User environment in micro-like kernel is like a process in mon-kernel.
+** methodology
+#+begin_src c
+struct Env *envs = NULL;		// All environments
+struct Env *curenv = NULL;		// The current env
+static struct Env *env_free_list;	// Free environment list
+#+end_src
+We need an array of envs to store the whole possible environments/process.
+** data_structure
+#+begin_src c
+struct Env {
+	struct Trapframe env_tf;	// Saved registers
+	struct Env *env_link;		// Next free Env
+	envid_t env_id;			// Unique environment identifier
+	envid_t env_parent_id;		// env_id of this env's parent
+	enum EnvType env_type;		// Indicates special system environments
+	unsigned env_status;		// Status of the environment
+	uint32_t env_runs;		// Number of times environment has run
+
+	// Address space
+	pde_t *env_pgdir;		// Kernel virtual address of page dir
+};
+#+end_src
+** necessary part
+Like a Unix process, a JOS environment couples the concepts of "*thread*" and "*address space*". The thread is defined primarily by the saved registers (the env_tf field), and the address space is defined by the page directory and page tables pointed to by env_pgdir. To run an environment, the kernel must set up the CPU with both the saved registers and the appropriate address space. 
+xv6 proc has kernel stack itself, but in jos/zynexos each cpu has their only one kernel stack.
+*** saved registers *env_tf*
+**** i386
+[[file::./static/ZynexOS/images/5_i386_tf.png]]
+**** riscv
+[[file:./static/ZynexOS/images/5_riscv_tf.png]]
+*** address space  *env_pgdir*
+As we have seen in x86 memlayout, there are UVPT, UPAGES, UENVS are mapped in specific virtual address location, that's because the user env or proc can read it from the address as agreed for each other.
+- KERNBASE pde entry
+  when you dive into kernel space you have to have the permissions to execute code in kernel, when syscall invokes and etc. KERNBASE above mapping is necessary.
+- UVPT/UPAGES/UENVS pde entry
+#+begin_src c
+	i = PD0X(UPAGES);
+	e->env_pgdir[i] = kern_pgdir[i];
+	i = PD0X(UENVS);
+	e->env_pgdir[i] = kern_pgdir[i];
+	//kernel stack do what? env has one single KERNEL_STACK
+	i = PD0X(KSTACKTOP-KSTKSIZE);
+	e->env_pgdir[i] = kern_pgdir[i];
+	//KERNBASE REMAP
+	for(i = PD0X(KERNBASE); i < 512; i++ ){
+		e->env_pgdir[i] = kern_pgdir[i];
+	}
+#+end_src
+
+in riscv, the PD0X pde entry is for maybe 512G , so it is enough to let only one entry to assign. But in i386 , it is 2-level page table, so you need to handle the mapping one by one cause the one pagetable size is 4M.
+
+* great questions
+** how to know from user traps into kernel
+*** riscv
+With the sstatus.SPP bit indicates, 1 for trapped from S mode, 0 for trapped from U mode.
+*** i386
+In x86, the segment selector when the protected mode is open, it has a bits field called CPL to indicate the privilege mode, CPL 0 for kernel, with high privilege, CPL 3 for user , with low privilege.
+** user stack to kernel stack
+*** i386
+In x86, the arch has TSS segment which is pointed by tr register. The tss segment has lots of information saved for the cpu. when the cpu is trapped from user mode by exception or interrupts, the cpu will automatically switch some registers necessary when the privilege change, such as esp. If CPL 3 changes to CPL 0, the the esp0 is set to esp, which we initialize the esp0 to KSTACKTOP in trap_init_percpu. And the procedure goes that, the tr indicates the offset of the GDT, then the GDT[tr] indicates the TSS segment address and size, when change happens the cpu can find the part.
+#+begin_src c
+	// Setup a TSS so that we get the right stack
+	// when we trap to the kernel.
+	thiscpu->cpu_ts.ts_esp0 = (uintptr_t)(KSTACKTOP - cpunum() * (KSTKSIZE + KSTKGAP));
+	thiscpu->cpu_ts.ts_ss0 = GD_KD;
+	thiscpu->cpu_ts.ts_iomb = sizeof(struct Taskstate);
+
+	// Initialize the TSS slot of the gdt.
+	gdt[(GD_TSS0 >> 3) + cpunum()] = SEG16(STS_T32A, (uint32_t) (&thiscpu->cpu_ts),
+					sizeof(struct Taskstate) - 1, 0);
+	gdt[(GD_TSS0 >> 3) + cpunum()].sd_s = 0;
+
+	// Load the TSS selector (like other segment selectors, the
+	// bottom three bits are special; we leave them 0)
+	ltr(GD_TSS0 + (cpunum() << 3));
+	// cprintf("cpunum : %d\n", cpunum());
+#+end_src
+*** riscv
+sscratch saves the kernel stack, when dives into the _alltraps, we use atomic instruction to exchange the sp and scratch, so the user stack is in the sscratch reg. If the sp is none-zero which means that we trapped into kernel form user, the stack is automatically changed. In this way, we have to set the sscratch to right kernel stack if necessary, and we set it to kernel stack when one env_pop_tf goes like that.
+#+begin_src asm
+	.section .text
+	.global _alltraps
+	.align 4
+_alltraps:
+  csrrw	sp, CSR_SSCRATCH, sp
+  bnez	sp, _save_context
+  csrr	sp, CSR_SSCRATCH
+
+  // save the stack
+  mv	t0, sp
+  addi	t0, t0, PT_SIZE
+  sd	t0, PT_SP(sp)
+#+end_src
+
+#+begin_src asm
+  _alltraps_ret:
+  	// now sp is set to trapframe bottom
+  	ld	s9, PT_S9(sp)
+  	.....
+  	ld	gp, PT_GP(sp)
+  	// use t0 to set csr registers
+
+  	ld	t0, PT_SSTATUS(sp)
+  	li	t1, 1
+  	slli	t1, t1, 8
+  	and	t0, t0, t1
+  	beqz 	t0, scratch_save_ // user mode
+
+  	li	t0, 0
+  	csrw	sscratch, t0
+
+  	ld	t0, PT_SSTATUS(sp)
+  	csrw	sstatus, t0
+  	ld	t0, PT_T0(sp)
+  	ld	t1, PT_T1(sp)
+  	ld	sp, PT_SP(sp)
+  	sret;
+  	
+  	// sp finally
+  scratch_save_:	
+  	li 	t0, (KSTACKTOP)
+  	csrw	sscratch, t0
+  	
+  	ld	t0, PT_T0(sp)
+  	ld	t1, PT_T1(sp)
+  	ld	sp, PT_SP(sp)
+  	sret;
+#+end_src
+
+** when traps happen ? where does the trap_handler reside?
+*** i386
+The i386 is quite complicated compared with riscv, it has idtr register to pointed a list of exception/interrupt vectors. All the exceptions and interrupts are marked fixed which means not be changed when the cpu is came out from manufacture. In the range 0-31 are defined by intel, and the 0-31 number are mapped 0-31 entries pointed by idtr register, if div zero instruction happens, it will dive into entry 0 handler. others next 31 are used for software interrupts and device handlers.
+One thing to note, the idt gate setting dpl matters for software instructions, if you set it to CPL0, when you invoke systemcall by int $0x30, it will generate a protection fault. In this way, you have to set it to CPL3, which means user program can invoke this software interrupts.
+
+Besides, in x86, some error codes are pushed when an interrupt or exception happened, some are not, if we set the traphandler in one entry, all the same, it won't make sense for we don't actually fully know what type of this exception happens. This differs in riscv arch.
+*** riscv
+The trap_handler is pointed by the stvec register, which means all the traps will enter this address to execute, and then distinguish the exception / interrupt types by scause register. In this way, the arch will be simple enough, and all the things that we are gonna do is software like trap_dispatch .etc.
+* Nested Exceptions and Interrupts
+** i386
+It is only when entering the kernel from user mode, however, that the x86 processor automatically switches stacks before pushing its old register state onto the stack and invoking the appropriate exception handler through the IDT. If the processor is already in kernel mode when the interrupt or exception occurs (the low 2 bits of the CS register are already zero), then the CPU just pushes more values on the same kernel stack.
+#+begin_src
+                       +--------------------+ <---- old ESP
+                     |     old EFLAGS     |     " - 4
+                     | 0x00000 | old CS   |     " - 8
+                     |      old EIP       |     " - 12
+                     +--------------------+            
+#+end_src
+** riscv
+In riscv, if we already in kernel stack,  from exceptions or interrupts, the hardware will automatically move SIE to SPIE, and set SIE to zero, which disable the local interrupt. The sscratch we set it to zero, and as we all know interrupt won't occur, maybe exception will occur, the we check if the sscratch is zero or not, if this is zero means we already in kernel mode, sp won't change. That's what I am thinking about.
+#+begin_src asm
+_alltraps:
+	// step1. stack switch if necessary
+	// swap tp and scratch in smode
+	// if we traped into kernel from user-mode then the sscratch is kernel stack
+	// but if we traped into kernel form kernel-mode then the sscratch is zero
+	// refered to PA4-NJU
+	csrrw	sp, CSR_SSCRATCH, sp
+	// sp != 0 means traped from user mode
+	bnez	sp, _save_context
+	// sp == 0 means trapped form S mode
+	csrr	sp, CSR_SSCRATCH
+
+_save_context:	
+	// save registers
+	addi	sp, sp, -PT_SIZE
+	sd	t0, PT_T0(sp)
+
+	
+	// save the stack
+	csrr 	t0, sscratch
+	sd	t0, PT_SP(sp)
+	
+	li	t0, 0
+	csrw	sscratch, t0
+#+end_src
+* Page Fault and Memory Protection
+We refered it from the jos page. [[https://pdos.csail.mit.edu/6.828/2017/labs/lab3/#Part-A--User-Environments-and-Exception-Handling][lab3-pagefault-memory-protection]]
+Operating systems usually rely on hardware support to implement memory protection. The OS keeps the hardware informed about which virtual addresses are valid and which are not. When a program tries to access an invalid address or one for which it has no permissions, the processor stops the program at the instruction causing the fault and then traps into the kernel with information about the attempted operation. If the fault is fixable, the kernel can fix it and let the program continue running. If the fault is not fixable, then the program cannot continue, since it will never get past the instruction causing the fault. 
+
+System calls present an interesting problem for memory protection. Most system call interfaces let user programs pass pointers to the kernel. These pointers point at user buffers to be read or written. The kernel then dereferences these pointers while carrying out the system call. There are two problems with this:
+
+    - A page fault in the kernel is potentially a lot more serious than a page fault in a user program. If the kernel page-faults while manipulating its own data structures, that's a kernel bug, and the fault handler should panic the kernel (and hence the whole system). But when the kernel is dereferencing pointers given to it by the user program, it needs a way to remember that any page faults these dereferences cause are actually on behalf of the user program.
+
+    - The kernel typically has more memory permissions than the user program. The user program might pass a pointer to a system call that points to memory that the kernel can read or write but that the program cannot. The kernel must be careful not to be tricked into dereferencing such a pointer, since that might reveal private information or destroy the integrity of the kernel.
+
+That is why we use mem_user_check to check whether the va passed by the user is valid or not, if it is invalid then destroy the env as soon as possible.
+
+#+begin_src c
+static void
+sys_cputs(const char *s, size_t len)
+{
+	// Check that the user has permission to read memory [s, s+len).
+	// Destroy the environment if not.
+
+	// LAB 3: Your code here.
+	user_mem_assert(curenv, (void *)s, len, PTE_U);
+
+	// Print the string supplied by the user.
+	cprintf("%.*s", len, s);
+}
+#+end_src
+* bug report
+** user link address
+Like if the user program is linked at address 0, that would not make sense. For example, we use NULL ( 0 ) to indicate an pointer is invalid, but if you linked address at VMA 0, then the address 0 has instruction, so that you can dereference the NULL pointer which causes buggy problems.
+
+** linker -b binary 
+*** i386-jos-elf-ld
+ If you look at kern/Makefrag, you will notice some magic that "links" these binaries directly into the kernel executable as if they were .o files. The -b binary option on the linker command line causes these files to be linked in as "raw" uninterpreted binary files rather than as regular .o files produced by the compiler. (As far as the linker is concerned, these files do not have to be ELF images at all - they could be anything, such as text files or pictures!) If you look at obj/kern/kernel.sym after building the kernel, you will notice that the linker has "magically" produced a number of funny symbols with obscure names like _binary_obj_user_hello_start, 
+*** riscv64-linux-gnu-ld
+This linker is not supported by -b binary option, so I searched from stackoverflow to find how to insert binary code in .data section which has three symbols like
+- _binary_obj_user_hello_start
+- _binary_obj_user_hello_size
+- _binary_obj_user_hello_end
+
+#+begin_src makefile
+	$(V)$(OBJCOPY) -I binary -O elf64-littleriscv $@ $(addsuffix _, $@)
+	$(V)$(LD) -o $@ $(KERN_LDFLAGS) $(KERN_OBJFILES) $(GCC_LIB) -b elf64-littleriscv $(foreach fo, $(KERN_BINFILES), $(addsuffix _,$(fo)))
+#+end_src
+Use objcopy command to convert elf file to binary file and then linked it to kernel.
+
+** div zero
+*** riscv
+The reference manual in riscv says that div zero is 0xffff.....;
+[[file::./static/ZynexOS/images/5_div_zero.png]]
+*** i386
+Pose an exception
+

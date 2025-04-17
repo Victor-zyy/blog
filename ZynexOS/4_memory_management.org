@@ -447,3 +447,7 @@ tlb_invalidate(pde_t *pgdir, void *va)
   local_flush_tlb_page_asid(ROUNDDOWN((unsigned long)va, PGSIZE), read_asid());
 }
 #+end_src
+
+** TODO boot_map_region
+
+
