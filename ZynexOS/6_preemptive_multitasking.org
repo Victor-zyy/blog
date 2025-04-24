@@ -1,0 +1,531 @@
+* SMP Support
+In the SMP architecture, all the cpus have individual regs beside of it, individual MMU, and individual cache maybe L1 cache, or L2 cache. There are two concepts like BSP (bootstap processor) and AP (application processor). The former is the main boot hart whose task is to bootstap other aps. There are lots of differences between i386 and riscv. In i386, the bsp and ap are defined by bios and mp rom table, however the riscv manual doesn't define who is the bsp. In riscv, there is a mhartid regiser which indicates the unique id of the thread.
+** riscv
+In my experiment, I use -smp 2 in qemu to run 2 hart threads, the bsp is unsure for who it is, maybe the hartid 0, maybe the hartid 1.
+[[file:./static/ZynexOS/images/6_smp_riscv.png]]
+[[file:./static/ZynexOS/images/6_smp_riscv2.png]]
+
+Actually, in zynexos design, I use sbi_ecall to get the total number of the SMPs. You might ask why is that? Since, our zynexos design doesn't support fdt tree, in normal OS-kernel, like linux, it will parse the fdt then construct a cpu-mask bit inside of the kernel. As we use the opensbi-firmware, the opensbi can parse the fdt-tree too, so I will use this to get the number of cpus in bsp.
+
+However, who is bsp is still unsure, in opensbi firmware, it will automatically let one cpu to run the warm-boot schedule, it use the lottery ticket and the atomic instructions along with it. One thing to mention that, only one cpu can jump outside of the firmware, other cpus will sleep at the function called *sbi_hsm_hart_wait*, we have to wake up using the ipi interrupt *sbi_ecall* to wake it up in S-mode.
+
+Besides, since opensbi-firmware use the lottery to set one cpu to run the main warm boot process, in our lowlevel boot stage in cfi-flash, we have to use this technique to select one cpu to run the main procedure like initialilize the ddr memory and other necessary peripherals.
+
+Here is what I did in zynexos boot code.
+#+begin_src asm
+      	
+    	/* Find Preferred boot Hart ID*/
+    	li	a6, -1
+    	li	a7, -1
+    	beq 	a6, a7, _try_lottery
+
+    _try_lottery:
+    	lla	a6, _relocate_lottery
+    	li	a7, 1
+    	amoadd.w a6, a7, (a6)
+    	bnez	a6, _wait_boot_done
+
+  	.section .data
+  	.align 3
+  	.globl _boot_status
+  	.type _boot_status, %object
+  _boot_status:
+  	.dword	0
+
+  	.type _relocate_lottery, %object
+  _relocate_lottery:	
+  	.dword	1
+#+end_src
+When the _boot_status  is set in bootmain function, the other cpus can jump into opensbi-firmware freely.
+
+#+begin_src asm
+_wait_boot_done:
+	/* Setup temporary trap handler */
+	lla	s4, _start_hang
+	csrw	CSR_MTVEC, s4
+
+	mv	tp, zero
+	lla	t0, _boot_status
+	li	t1, 1 // 1 means _boot_status == 1
+1:	ld	t2, (t0)
+	bgt 	t1, t2, 1b
+	// jump opensbi firmware
+	li 	t0, 0x800
+	slli	t0, t0, 20
+	csrr	a0, mhartid
+
+	# a1 doesn't reset
+	jr	t0
+#+end_src
+
+The boot status is set by atmoic instruction, like atomic add or xchg.
+#+begin_src c
+	atomic_add(1, (unsigned long*)_boot_status);
+#+end_src
+** i386
+In x86 architecture, the aps/bsp consequences are defined in rom table or bios or somewhere. That's to say, who is the bsp or who are the aps are sure after the chip is taped out.
+
+I will illustrate that how the bsp wakes up all the aps, and how the bsp knows about the number of aps.
+
+- Firstly, search the mp floating pointer from special areas.
+- Secondly, iterates the mp configuration table pointed by mp floating pointer.
+- Finally, initialize the cpuinfo's cpuid for each cpus, it aims to wake up later on.
+
+This main image illustrate the process  of finding aps.
+[[file:./static/ZynexOS/images/6_i386_mpinit.png]]
+
+*** mp floating table
+
+#+begin_src c
+// See MultiProcessor Specification Version 1.[14]
+struct mp {             // floating pointer [MP 4.1]
+        uint8_t signature[4];           // "_MP_"
+        physaddr_t physaddr;            // phys addr of MP config table
+        uint8_t length;                 // 1
+        uint8_t specrev;                // [14]
+        uint8_t checksum;               // all bytes must add up to 0
+        uint8_t type;                   // MP system config type
+        uint8_t imcrp;
+        uint8_t reserved[3];
+} __attribute__((__packed__));
+#+end_src
+
+1.BDA (bios data address) 0x400
+2.EBDA resides
+0x040E (word) 	EBDA base address >> 4 (usually!)
+3.system base memory
+0x0413 (word) 	Number of kilobytes before EBDA / unusable memory 
+4.BIOS (0xf0000)
+0x000F0000 	0x000FFFFF 	64 KiB 	Motherboard BIOS 
+
+After find the mp floating table, the mp configuration address in the mp->physaddr.
+*** mp configuration table
+#+begin_src c
+struct mpconf {         // configuration table header [MP 4.2]
+        uint8_t signature[4];           // "PCMP"
+        uint16_t length;                // total table length
+        uint8_t version;                // [14]
+        uint8_t checksum;               // all bytes must add up to 0
+        uint8_t product[20];            // product id
+        physaddr_t oemtable;            // OEM table pointer
+        uint16_t oemlength;             // OEM table length
+        uint16_t entry;                 // entry count
+        physaddr_t lapicaddr;           // address of local APIC
+        uint16_t xlength;               // extended table length
+        uint8_t xchecksum;              // extended table checksum
+        uint8_t reserved;
+        uint8_t entries[0];             // table entries
+} __attribute__((__packed__));
+#+end_src
+
+As we can see the mpconf's  entries we use uint8_t [], that is because we don't know how many entries we have. And each entry stands for one item maybe for a CPU core, or a CPU bus.etc. However, we set the maximum of cpus (aka 8).
+
+Each entry table is the mpproc instance, in a for loop, we iterate the items and then for use later on.
+
+#+begin_src c
+struct mpproc {         // processor table entry [MP 4.3.1]
+        uint8_t type;                   // entry type (0)
+        uint8_t apicid;                 // local APIC id
+        uint8_t version;                // local APIC version
+        uint8_t flags;                  // CPU flags
+        uint8_t signature[4];           // CPU signature
+        uint32_t feature;               // feature flags from CPUID instruction
+        uint8_t reserved[8];
+} __attribute__((__packed__));
+#+end_src
+
+
+
+
+* SMP Boot Stage
+First let's see the architectures of the SMP in riscv and x86, they are different in some ways, but the main idea are all the same. And the abstraction will help us understand the procedure of bootstage in SMP.
+
+** i386
+[[file:./static/ZynexOS/images/6_i386_smp_arch.png]]
+
+** riscv
+[[file:./static/ZynexOS/images/6_riscv_smp_arch.png]]
+
+** bootstage
+*** i386
+Remeber we got the apicid in mp_init, all available apicid is in cpuinfo data arrays. Then we are gonna use IPI to wake up each cpu one by one, the details covers too much about the lapic and inner x86 specification. I will illustrate it in short.
+
+The main procedure is tell one of the cpu identified by cpuid residing in cpuinfo, and the addr to run of each cpu once start up / reset.
+
+In this way, we have to prepare the code of  SMP entry, what we did is to copy the code to memory.
+
+Actually, once the cpu received the ipi interrupt, it will firstly run in real-mode, which means we don't run in paging-enalbe mode, that is to say the address we handle is actually the physical address, so we have to be careful too much.
+
+The mpentry code is down below.
+#+begin_src asm
+  /* See COPYRIGHT for copyright information. */
+
+#include <inc/mmu.h>
+#include <inc/memlayout.h>
+
+###################################################################
+# entry point for APs
+###################################################################
+
+# Each non-boot CPU ("AP") is started up in response to a STARTUP
+# IPI from the boot CPU.  Section B.4.2 of the Multi-Processor
+# Specification says that the AP will start in real mode with CS:IP
+# set to XY00:0000, where XY is an 8-bit value sent with the
+# STARTUP. Thus this code must start at a 4096-byte boundary.
+#
+# Because this code sets DS to zero, it must run from an address in
+# the low 2^16 bytes of physical memory.
+#
+# boot_aps() (in init.c) copies this code to MPENTRY_PADDR (which
+# satisfies the above restrictions).  Then, for each AP, it stores the
+# address of the pre-allocated per-core stack in mpentry_kstack, sends
+# the STARTUP IPI, and waits for this code to acknowledge that it has
+# started (which happens in mp_main in init.c).
+#
+# This code is similar to boot/boot.S except that
+#    - it does not need to enable A20
+#    - it uses MPBOOTPHYS to calculate absolute addresses of its
+#      symbols, rather than relying on the linker to fill them
+
+#define RELOC(x) ((x) - KERNBASE)
+#define MPBOOTPHYS(s) ((s) - mpentry_start + MPENTRY_PADDR)
+
+.set PROT_MODE_CSEG, 0x8	# kernel code segment selector
+.set PROT_MODE_DSEG, 0x10	# kernel data segment selector
+
+.code16           
+.globl mpentry_start
+mpentry_start:
+	cli            
+
+	xorw    %ax, %ax
+	movw    %ax, %ds
+	movw    %ax, %es
+	movw    %ax, %ss
+
+	lgdt    MPBOOTPHYS(gdtdesc)
+	movl    %cr0, %eax
+	orl     $CR0_PE, %eax
+	movl    %eax, %cr0
+
+	ljmpl   $(PROT_MODE_CSEG), $(MPBOOTPHYS(start32))
+
+.code32
+start32:
+	movw    $(PROT_MODE_DSEG), %ax
+	movw    %ax, %ds
+	movw    %ax, %es
+	movw    %ax, %ss
+	movw    $0, %ax
+	movw    %ax, %fs
+	movw    %ax, %gs
+
+	# Set up initial page table. We cannot use kern_pgdir yet because
+	# we are still running at a low EIP.
+	movl    $(RELOC(entry_pgdir)), %eax
+	movl    %eax, %cr3
+	# Turn on paging.
+	movl    %cr0, %eax
+	orl     $(CR0_PE|CR0_PG|CR0_WP), %eax
+	movl    %eax, %cr0
+
+	# Switch to the per-cpu stack allocated in boot_aps()
+	movl    mpentry_kstack, %esp
+	movl    $0x0, %ebp       # nuke frame pointer
+
+	# Call mp_main().  (Exercise for the reader: why the indirect call?)
+	movl    $mp_main, %eax
+	call    *%eax
+
+	# If mp_main returns (it shouldn't), loop.
+spin:
+	jmp     spin
+
+# Bootstrap GDT
+.p2align 2					# force 4 byte alignment
+gdt:
+	SEG_NULL				# null seg
+	SEG(STA_X|STA_R, 0x0, 0xffffffff)	# code seg
+	SEG(STA_W, 0x0, 0xffffffff)		# data seg
+
+gdtdesc:
+	.word   0x17				# sizeof(gdt) - 1
+	.long   MPBOOTPHYS(gdt)			# address gdt
+
+.globl mpentry_end
+mpentry_end:
+	nop
+	
+#+end_src
+
+The boot procedure is kind of simple, its task is to
+1. disable the interupt
+2. setup the temporary pgdir
+3. enable paging
+4. setup cpu kernel stack
+5. jump mp_main
+
+However, one thing to notice that we use the MPBOOTPHYS predefine macro to cal the address of each symbol. Why? The reason is that we linked the mpentry above the kernbase specified in linker file, and the code is loaded into the MPENTRY address aka 0x7000, so we use this macro to get the absolute address of each symbol, that is very important.
+
+*** riscv
+In riscv arch, the procedure is pretty the same, as we analyse before, we select one cpu as bsp, then the bsp wakes up all the harts using ipi, but opensbi-firmware provided an sbi_ecall to wake these aps up, and set the next jump address passing the arguments.
+
+Here is what I did in boot_aps code. Unlike the i386 with lots of initialilization of lapic and operations, in riscv the process is kind of easy.
+
+#+begin_src c
+static void
+boot_aps(void)
+{
+	extern unsigned char mpentry_start[], mpentry_end[];
+	void *code;
+	struct CpuInfo *c;
+	uint8_t i = 0;
+	uint8_t ret = 0;
+
+	if(1 == ncpu)
+	  return;
+	// Write entry code to unused memory at MPENTRY_PADDR
+	code = KADDR(MPENTRY_PADDR);
+	memmove(code, mpentry_start, mpentry_end - mpentry_start);
+
+	// Boot each AP one at a time
+	ret = cpu_mask;
+	c   = cpus;
+	for (i = 0; i < 8; i++){
+	  if(ret & 0x1){
+	    c->cpu_id = i;
+	    // Tell mpentry.S what stack to use 
+	    mpentry_kstack = percpu_kstacks[i] + KSTKSIZE;
+	    sbi_boot_ap(c->cpu_id, MPENTRY_PADDR, 1); 
+	    // Wait for the CPU to finish some basic setup in mp_main()
+	    while(c->cpu_status != CPU_STARTED)
+		    ;
+	  }
+	  c++;
+	  ret = ret >> 1;
+	}
+}
+#+end_src
+
+The task we did in riscv is the same.
+1. copy code to MPENTRY ADDR
+2. send ipi
+3. wait for cpuinfo states set by aps using atomic instruction
+
+#+begin_src c
+int sbi_boot_ap(unsigned long apid, unsigned long bootaddr, unsigned long nextmode)
+{
+	struct sbiret ret;
+	ret = sbi_ecall(SBI_EXT_HSM,SBI_EXT_HSM_HART_START, apid, bootaddr, nextmode, 0, 0, 0);
+
+	return ret.error;
+}
+#+end_src
+
+But in mpentry.S code we have to do a lot compared with i386, since riscv-gnu-toolchain doesn't support macro change symbol using la/lla instructions, so the way I do it is calculate the offset of each symbol when use it. If we don't specify the right symbol address, our code will dump in a terrible stage which is hard to debug. Furthermore, I adopt a debug session learned from linux kernel to debug once the symbol address is not loaded to csr regs successfully. I will show you what I did later.
+
+I will illustrate one symbol to do, with an example, load temporary pgdir in set up stage.
+#+begin_src asm
+
+  .globl mpentry_start
+  mpentry_start:
+
+
+    # clear the interrupt
+    csrw CSR_SIE, zero
+    csrw CSR_SIP, zero
+  	
+    # Set up initial page table. We cannot use kern_pgdir yet because
+    lla	a6, (mpentry_start) ;
+    lla	a4, (entry)
+    lla     a5, (entry_pgdir0)
+    sub	a4, a5, a4
+    li	t0,	0x10
+    slli	t0,	t0, 16
+    add	a4, a4, t0
+    add	a6, a6, a4
+
+#+end_src
+
+Once we set up, one of the aps will run in S-mode, the satp bit of page-mode is not open, so our pc is pointed to MPENTRY ADDR (aka 0x80100000), but the symbol of entry_pgdir0 is linked above KERNELBASE which is 0xffffffff80200000. When we load directly use la/lla using the pic, the presudo instruction is pc relative so none of each linked address is not right. Since both are not right, we mustn't use la, GOT is not rigth either, but the offset is sure. So use lla instruction, calculate the offset, and add it to the a6 reg, it has 0x100000 gap between the KERNELBASE and MPENTRY ADDR, so we have to add it too.
+
+#+begin_src asm
+  	
+	// reset the sscratch to zero means now we're in kernel / s-mode
+	li	a2, 0
+	csrw	sscratch, a2
+
+	lla	a6, (mpentry_start) ;
+	lla	a4, (entry)
+	lla     a5, (jump_relocated)
+	sub	a4, a5, a4
+	// a4 store the offset 
+	li	t0, 	0x8020
+	slli	t0,	t0, 16
+
+	li	t1,	(~1)
+	srli	t1,	t1, 	0x20
+	slli	t1,	t1, 	0x20
+
+	or	t0,	t0, t1
+	add	a6, 	a4, t0
+
+	jr 	a6
+jump_relocated:	
+#+end_src
+
+We all know that, when open the mmu, we have to jump relocated, but the relocated symbol address must be recaled again.
+
+After that, we don't have to cal the symbol, we are now run above the linker address.
+#+begin_src asm
+  
+	// reset the satp vector
+	la	a2, _alltraps
+	csrw	CSR_STVEC, a2
+
+	
+	# Switch to the per-cpu stack allocated in boot_aps()
+	# offset
+	la     t0, mpentry_kstack
+	ld	t0, 0(t0)
+	add	sp, t0, zero
+#+end_src
+
+In conclusion, in riscv, the mpentry.S aims to do tasks like
+1. disable interrupt
+2. relocate using temporary pgdir
+3. set up kernel cpu stack for each cpu
+4. jump mp_main in c code.
+
+FInally, I will give a useful debug tip like set stvec to a temporary place to spin which helps us when facing error, like setting wrong csr regs.
+#+begin_src asm
+    	
+  	csrw stvec ,_debug_
+  _debug_:
+  	j _debug_
+
+  	jr 	a6
+  jump_relocated:	
+#+end_src
+
+If the jr relocated instruction failed, it will run into the _debug now we know why and what instructions we executed before.
+
+
+* Cooperative Multitasking
+In order to implement the cooperative multitasking, we have to do some necessary works down below to get it done.
+
+1. yield (system call)
+2. save context
+3. scheduler policy
+4. context switch
+
+
+The main idea of cooperative multitasking is that we have multiple procs, and we trust of each other, and if one of the procs doesn't use the cpu anymore it yields it to another one. However, in early times, the OS uses this method for a while, but if one of the proc occupies the cpu for too long, and the other procs may be starving. Or sometimes the proc may be divided user-friendly proc or proc cal related, the cooperative maultitasking may be not friendly for those types of procs. 
+
+Save Context needs a kernel stack of each cpu to do it, but why do we need a kernel stack, saving context on the user stack is ok or not? I searched online found that, as I don't consider this question before , using kernel stack to gurantee the kernel is in control, for example if the user stack is nearly overflow, then an interrupt came out, the cpu trapped into kernel, to save context on the kernel stack, but overflow at some point, the kernel will be crashed by a user proc. Sometimes, with the kernel stack, when a user stack overflows, the cpu will trapped into kernel and allocate a new page to the user stack for continualable use.
+
+Scheduler policy is not the key point in my blog, later I will write some articles about linux kernel schedule policies to introduce plenty of it. In zynexos, I use the simple RR(round-robin) policy for scheduler, like if one proc/env yields the cpu, then the cpu will find another available and runnable proc/env to run it.
+
+Context switch, namely switch the sp pointer or esp pointer in i386, and do the opposite things of saving context.
+
+Next, I will use code to illustrate the procedure of these four steps.
+** yield system call
+in i386, the system call adding is pretty easy, and one thing to notice that, the x86 hardware will automatically add 4 to eip when the system call / soft interrupt happens. But in riscv arch, we have to add it manually, but the system yield is different from normal system calls like sys_getc or sys_puts, that is because we save the context before the env is switched off. So we add a new reg saved val in trapframe, like orig_a0, and when the context is poped off, we have to consider that whether orig_a0 is sys_yield number, then we add 4 to sepc.
+** stack switch
+In i386, if user env/proc trapped in kernel, the stack is automatically changed to esp0 specified by kernel when initialilization, the esp0 points its cpu kernel stack, honestly we have not 2 levels of CPL, but we do use 0 and 3 CPL, the former for kernel, and the latter for user. This is pretty simple for software to use and implement. But in riscv, the all modes have one sp pointer, so we have to make a run on stack switch manually. I do it by use a temp sscratch in S-mode to save the kernel stack address once the kernel is initialilized, when the context is poped off, save the kernel stack on each cpu's sscratch regiser. There is one more question which is how do we know about the cpunum when the env is switched on.
+
+To solve this problem, I use *tp* (thread pointer) to pointed to Env structure, when each env is switched on, it will set the env->cpunum to the specified cpu. Then when in _alltraps_ret, we will get the val and cal the right kernel stack to its right address value.Initialilize each env's tp regiser once it is created.
+#+begin_src asm
+	// sp finally
+scratch_save_:	
+	// tp points to env of itself
+	// t0 equals to cpunum which the env runs on it
+	lw	t0,  ENV_CPUNUM_OFF(tp)
+	// t1 points to the cpu0 kstack top
+	// KSTKSIZE + KSTKGAP
+	li	t1, (KSTKSIZE)
+	li	t2, (KSTKGAP)
+	add	t2, t1, t2
+	// calculate the gap
+	mulw    t2,  t0, t2	
+	//
+	li 	t1, (KSTACKTOP)
+	sub	t1, t1, t2
+
+	csrw	sscratch, t1
+#+end_src
+** save context
+The first time we saved the context on the kernel stack, then after we call the trap funciton to process the exceptions or interrupt we save it on the env->env_tf instance, which is delayed for some reasons, we are not like linux kernel for each proc has one kernel stack along side of it, we adopt one cpu for per kernel stack.
+#+begin_src c
+    // Copy trap frame (which is currently on the stack)
+    // into 'curenv->env_tf', so that running the environment
+    // will restart at the trap point.
+    curenv->env_tf = *tf;
+    // The trapframe on the stack should be ignored from here on.
+    tf = &curenv->env_tf;
+#+end_src
+** scheduler policy
+Round-Robin policy, just iterate the env in envs array to seach for any one is RUNNABLE then get the env's address and call env_run to switch the context. But one thing to realize if a cpu doesn't find any one of env avaliable for use, then it will go into sched_halt to stop run, restore the kernel stack pointer in sscratch and esp , enable the timer interrupt to recevie interrupt form timer then trapped again to seach.
+** context switch
+#+begin_src c
+void
+env_run(struct Env *e)
+{
+	// Step 1: If this is a context switch (a new environment is running):
+	//	   1. Set the current environment (if any) back to
+	//	      ENV_RUNNABLE if it is ENV_RUNNING (think about
+	//	      what other states it can be in),
+	//	   2. Set 'curenv' to the new environment,
+	//	   3. Set its status to ENV_RUNNING,
+	//	   4. Update its 'env_runs' counter,
+	//	   5. Use lcr3() to switch to its address space.
+	// Step 2: Use env_pop_tf() to restore the environment's
+	//	   registers and drop into user mode in the
+	//	   environment.
+
+	// Hint: This function loads the new environment's state from
+	//	e->env_tf.  Go back through the code you wrote above
+	//	and make sure you have set the relevant parts of
+	//	e->env_tf to sensible values.
+
+	// LAB 3: Your code here.
+	// Step 1:
+	if(curenv != NULL){
+		// a context switch
+		curenv->env_status = ENV_RUNNABLE;
+	}else{
+		// first initialization
+	}
+	curenv = e;
+	curenv->env_status = ENV_RUNNING;
+	curenv->env_runs ++;
+
+	load_satp_asid(PADDR(curenv->env_pgdir), curenv->env_id & 0x3ff);
+	// Step 2:
+	//
+	env_pop_tf(&curenv->env_tf);
+	// never gonna return
+
+	panic("env_run not yet implemented");
+}
+#+end_src
+But I have to point it out that, if you have one cpu using curenv as the global variable is definitly ok, but if you have SMPs on a board, curenv must be a global var, it will mushed if out for kernel , and always trapped into kdebug.
+** Single CPU
+The sched frame is like this,
+[[file:./static/ZynexOS/images/6_cpu0_sched.png]]
+#+begin_src c
+struct Env *curenv = NULL;              // The current env
+#+end_src
+** SMP
+#+begin_src c
+#define curenv (thiscpu->cpu_env)		// Current environment
+#+end_src
+
+
+* bug report
+** cpunum
+in i386, the lapic gives the cpuid when each cpu runs, but in riscv, only m-mode mhartid can be specified a unique id number, so we add another ecall to get the id of each, but it will consume time and energy for plenty of trapping.
+** smp error
+curenv for each cpu
+** riscv yield 
+save orig_a0 val, for next popping use.
