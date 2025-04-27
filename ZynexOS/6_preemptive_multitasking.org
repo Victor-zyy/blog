@@ -522,6 +522,134 @@ struct Env *curenv = NULL;              // The current env
 #+end_src
 
 
+* Copy-On-Write
+** cow-fork
+fork primitive, is kind of fork and knife on the lunch table, two same procs or envs are divided by return value of eax in i386 and a0 in riscv. So everything works pretty cool like we can create user proc/env from user-mode, it can be used in network server, or other applications. But the fork itself does a lot of unnecessary copies like the parent, for example maybe the .text segment doesn't need to be copied , we can just use mappings the pointing to the same physical page like the parent. It can increase much more efficency and speed.
+
+However, when we implentment copy-on-write fork, we have to handle the page-fault exception, in jos/zynexos we implement user-level pgfault handler. It can let the user proc to handle the page fault issue, like allocate a new page and copy the contents of fault memory to it, and give it a new mapping attribute.
+
+We have implement a lot of page mapping and page alloc syscall for user to use. Here are  what we've done below.
+#+begin_src c
+int	sys_page_alloc(envid_t env, void *pg, int perm);
+int	sys_page_map(envid_t src_env, void *src_pg,
+		     envid_t dst_env, void *dst_pg, int perm);
+int	sys_page_unmap(envid_t env, void *pg);
+#+end_src
+
+This image shows the outline of the cow-fork.
+[[file:./static/ZynexOS/images/6_cow_fork.png]]
+
+** UVPT
+The i386 2-level-page mechanism can use UVPT technique to handle the page mappings in cow-fork. Like, we have to calculate how many pages we are mapped in parent env, and then create the same page-mappings in the child's env. So the first thing we have to look through the page-mappings, but in user-program it is not allowed to look through the kernel data structures pgdir, but we can use a technique UVPT, it is a PDE in kern_pgdir, but the physical address of the entry points to the kern_pgdir itself, and set the attribute of the PTE is PTE_U, then the user program can access the kern_pgdir when accessing the uvpt[0] and uvpd[0] etc.
+
+The principle of the pointing to itself goes through like this.
+[[file:./static/ZynexOS/images/6_uvpt_principle.png]]
+And in user proc/env, start up, we set the two arrarys
+#+begin_src asm
+// Define the global symbols 'envs', 'pages', 'uvpt', and 'uvpd'
+// so that they can be used in C as if they were ordinary global arrays.
+	.globl envs
+	.set envs, UENVS
+	.globl pages
+	.set pages, UPAGES
+	.globl uvpt
+	.set uvpt, UVPT
+	.globl uvpd
+	.set uvpd, (UVPT+(UVPT>>12)*4)
+#+end_src
+You might wonder why uvpd is (UVPT + (UVPT >> 12) * 4) formula, I will explain this for you, consider we have enabled the mmu, then the uvpt is at virtual address of 0xef400000, UVPT >> 12 means the whole PTE index, and the entry of each is 4 bytes, plus the UVPT offset we can get the pde entries of the kernel_pgdir.
+
+Actually it does the same thing in 4-level page in riscv.
+[[file:./static/ZynexOS/images/6_uvpt_riscv.png]]
+
+However, in riscv the sv48/sv39 doesn't support the pde pd0 and etc. attribute PTE_U, which means only the leaf node has the attribute of the PTE_U, other intermediate pte are reserved bits of PTE_U.
+
+** user-level pgfault handler
+The user-level pgfault mechanism is that, when an exception occurs in u-mode, it will automatically jump into the kernel and then the pgfault handler in u-mode and handle all of the fault address , finally jump back to the instruction that has not been executed.
+
+So we add another two functions of syscall to set the pgfault_entry for the env.
+#+begin_src c
+static envid_t sys_exofork(void);
+int	sys_env_set_status(envid_t env, int status);
+int	sys_env_set_pgfault_upcall(envid_t env, void *upcall);
+#+end_src
+I will show you an image of the process of the user-level pgfault handler procedure.
+[[file:./static/ZynexOS/images/6_user_level_pgfault.png]]
+
+In riscv, the utrapframe is like that,
+#+begin_src c
+struct UTrapframe {
+	/* information about the fault */
+	uint64_t utf_fault_va;	/* va for T_PGFLT, 0 otherwise */
+	/* trap-time return state */
+	struct SavedRegs utf_regs;
+	uint64_t utf_cause;
+	uintptr_t utf_epc;
+	/* the trap-time stack to return to */
+	uintptr_t utf_sp;
+} __attribute__((packed));
+#+end_src
+in i386 the utrapframe is like that,
+#+begin_src c
+  
+struct UTrapframe {
+	/* information about the fault */
+	uint32_t utf_fault_va;	/* va for T_PGFLT, 0 otherwise */
+	uint32_t utf_err;
+	/* trap-time return state */
+	struct PushRegs utf_regs;
+	uintptr_t utf_eip;
+	uint32_t utf_eflags;
+	/* the trap-time stack to return to */
+	uintptr_t utf_esp;
+} __attribute__((packed));
+#+end_src
+The Pushregs is 8 registers like eax,ebx,esi,edi, etc. unlike the riscv, I think all regs must be saved, the all be used for temporary calculations.
+** pgfault return
+in riscv, I use the gp as the jr gp instruction parameter, if we do use the ra, but sometimes ,ra might not be saved in stack, so the ra must be not changed after pgfault return.
+** sys_exofork must be inlined, why?
+If we are not using the inline function of sys_exofork, then there must be stack pushed when call int 0x30 or ecall, and the user level stack has not copied until the sys_exofork returned, when user-stack changes then the pop from this function behavior will change.
+
+* Preemptive Multitasking
+Why we need preemptive multitasking, if a cooperative multitasking doesn't meet our needs. Like, if we have a situation when a program never yields the cpu actively, the other envs might be starving, and never run again. So we need to use timer to give each cpu a fixed time slice and if a slice is uesd this proc must be scheded no matter what. 
+
+** timer
+The timer acts an important role in preemptive multitasking, when an interrupt of timer came out, the env is scheded and another runnable proc runs again. If none of procs are runnable, then we set the cpu to halt state. reset the kernel stack and waiting for the interrupt.
+** SMPs
+*** riscv
+#+begin_src asm
+// Reset stack pointer, enable interrupts and then halt.
+asm volatile (
+	"mv fp, zero\n"		
+	"mv sp, %0\n" \
+	// Uncomment the following line after completing exercise 13
+	"csrw  sscratch, zero\n"\
+	"csrr  t0, sstatus\n"\
+	"or    t0, t0, 0x2\n"
+	"csrw  sstatus, t0\n"\
+	"li    t0, 0x20\n"\
+	"csrw  sie, t0\n" \
+	"1:\n" \
+	"nop\n" \
+	"j 1b\n" \
+: : "r" (thiscpu->kern_sp));
+#+end_src
+*** i386
+#+begin_src asm
+// Reset stack pointer, enable interrupts and then halt.
+asm volatile (
+	"movl $0, %%ebp\n"
+	"movl %0, %%esp\n"
+	"pushl $0\n"
+	"pushl $0\n"
+	// Uncomment the following line after completing exercise 13
+	"sti\n"
+	"1:\n"
+	"hlt\n"
+	"jmp 1b\n"
+: : "a" (thiscpu->cpu_ts.ts_esp0));
+#+end_src
+
 * bug report
 ** cpunum
 in i386, the lapic gives the cpuid when each cpu runs, but in riscv, only m-mode mhartid can be specified a unique id number, so we add another ecall to get the id of each, but it will consume time and energy for plenty of trapping.
@@ -529,3 +657,27 @@ in i386, the lapic gives the cpuid when each cpu runs, but in riscv, only m-mode
 curenv for each cpu
 ** riscv yield 
 save orig_a0 val, for next popping use.
+
+** sum bit in SMPs
+If you don't specify the SUM bit in sstatus, once use printf function, the kernel will check the user stack and then ld/sd data from it, Once you don't specify the bit in it, it will cause a LD Page Fault.
+Once in SMPs mp_main, we call env_init_percpu, which is hard to find.
+#+begin_src c
+// Load GDT and segment descriptors.
+// Riscv Arch must set the SUM bit in each cpu's sstatus
+void
+env_init_percpu(void)
+{
+  set_status_sum(true);
+}
+#+end_src
+
+** asid hardware in qemu
+In qemu, the hardware asid tag for tlb is not supported, we consider it for future use of actual board like openc906, we add two load_satp funciton to provide asid support.
+
+** riscv timer interrupt
+The ref manual says  when the riscv in U-mode, it will ignore the SIE bit in sstatus which is the global bit of interrupt in riscv. Also, in U-mode, when the kernel gets an interrupt, the riscv will firstly get into M-mode, and set the S-mode pending bit of interrupt, then if the sie registers is set for timer interrupt then dive into s-mode, and sched to another env, restore the sstatus when the env_pop_tf is executed.
+[[file:./static/ZynexOS/images/6_riscv_timer.png]]
+
+When interrupted is came out in s-mode, the SPIE is set by SIE, then SIE is set to zero, and the SPP is 1 indicating trapped from s-mode. And the global bit sie of sstatus must be set to invoke the interrupt in s-mode.
+
+And we make a illusion when one cpu is trapped in sched_halt, reset the SPP to zero and sret back to env that was interupted before.
