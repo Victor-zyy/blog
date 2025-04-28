@@ -1,0 +1,77 @@
+* FileSystem Preliminary
+** inode region
+The data regions are divided into much larger (typically 8KB or more) data blocks, within which the file system stores file data and directory meta-data.
+** data region
+a file's inode holds critical meta-data about the file such as its stat attributes and pointers to its data blocks.
+** jos/zynexos
+our file system will not use inodes at all and instead will simply store all of a file's (or sub-directory's) meta-data within the (one and only) directory entry describing that file. 
+** disk layout
+The file system hides all of the layout of the inode or data block etc. on a hard-disk or cfi-flash. It supplied multiple interfaces for interacting blocks on the disk. These apis are all like read/write and etc.
+
+* Sector and Block
+Most disks are allowed to read or write per sector at one time, and the granularity of each sector is 512K or something else. But the block is used by the kernel aka operating system to operate. The size of the block has nothing to do with the sector.
+
+We use 4K size of the sector, matching the processor's page size.
+
+* Layout
+** superblock
+Not all the blocks are reserved to store the data regions or inode regions, we use the first two blocks to let the filesystem easy to find, also doc some significant information about the filesystem, like when the fs is mounted, and the timestamps of the fs, and the partition table etc.
+
+superblock describes the information of the fs such as the block size, disk size, any meta-data required to find the root directory.
+
+Layout diagram of the fs on the disk image.
+
+** dir/file meta-data
+The file or directory maintains a meta data of struct FIle , resides in disk/flash memory.
+#+begin_src c
+struct File {
+	char f_name[MAXNAMELEN];	// filename
+	off_t f_size;			// file size in bytes
+	uint32_t f_type;		// file type
+
+	// Block pointers.
+	// A block is allocated iff its value is != 0.
+	uint32_t f_direct[NDIRECT];	// direct blocks
+	uint32_t f_indirect;		// indirect block
+
+	// Pad out to 256 bytes; must do arithmetic in case we're compiling
+	// fsformat on a 64-bit machine.
+	uint8_t f_pad[256 - MAXNAMELEN - 8 - 4*NDIRECT - 4];
+} __attribute__((packed));	// required only on some 64-bit machines
+#+end_src
+We maintain the invariant that the size of a directory-file is always a multiple of the file system's block size.
+
+* fs_server
+Known that, we tried to implenment a micro-kernel, so each fundamental infrastructure has to be a env or a proc, and if the normal env wants to get information or message from the fs_server, it should use the ipc message connections.
+
+** source code
+#+begin_src c
+  +->umain
+    +->serve_init
+      +->fs_init
+       +->fs_test
+        +->serve
+#+end_src
+
+** serve
+
+
+* spawn-micro kernel like exec
+The spawn is like unix-style exec function, there is a little difference beween each, for it creates one env child and run itselt independently. Unlike exec in unix, it will dives into kernel mode and initialize the ustack, load the prog from the disk and then executes occupied the parent.
+
+** procedure
+1. read the prog form the disk using the fs/api interfaces, such as readn / read.
+2. set up the child trap frame as with the stack.(args like ls -h/ -a).
+3. map_segments
+4. copy shared pages of the parent which is meaningful in exec.
+
+** sharing
+Why we need to copy shared pages from parent to the child, in the former labs, we don't use IO like file or somthing else, but now we've got file system and fd descriptors. If we still use the COW mechanism, then the pipes won't succeed. If the page is not marked as cow, then we won't be able to access the fd that the parent opened.
+
+So we need copy directly when we meet the PTE_SHARE page attributes, this can be achieved easily in i386, but it is hard to do in riscv, that's because the riscv pde entry doesn't have the PTE_U valid.
+
+* Shell
+If we want to interact with shell, then we need a way to type it in u-mode, interrupt from u-mode for uart/serail/kbd is necessary.
+
+** pipe
+** re-direct output
