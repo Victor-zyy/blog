@@ -55,7 +55,6 @@ Known that, we tried to implenment a micro-kernel, so each fundamental infrastru
 
 ** serve
 
-
 * spawn-micro kernel like exec
 The spawn is like unix-style exec function, there is a little difference beween each, for it creates one env child and run itselt independently. Unlike exec in unix, it will dives into kernel mode and initialize the ustack, load the prog from the disk and then executes occupied the parent.
 
@@ -75,3 +74,110 @@ If we want to interact with shell, then we need a way to type it in u-mode, inte
 
 ** pipe
 ** re-direct output
+
+* Bug Report
+** pp_ref clear not finished
+When the pp_ref is not zero, in bug cases, the pp_ref is 65535 (which is 0xffff in hex format), after add one value it will return zero, which causes some bugs hard to find.  Actually using *assert* is a great technique to quickly handle the bug when appearing.
+#+begin_src c 
+	assert(pg_info->pp_ref != 0);
+#+end_src
+However, the page when used we will call page_remove function to handle, it will call page_decref or page_free when the pp_ref equals to zero. It will be zero after free, when page_alloc function is called again, the page_ref is zero still, but the realtiy is not. /TODO/
+
+Finally, I found the bug, it was in env_free, which calls the page_decref to increment the pp_ref of the page, so the page_ppref will go out of bound.
+
+#+begin_src c
+//
+// Frees env e and all memory it uses.
+//
+void
+env_free(struct Env *e)
+{
+	pte_t *pt;
+	pte_t *pd0;
+	pte_t *pd1;
+	pte_t *pd2;
+	uint64_t pdeno, pteno;
+	uint64_t pde1no, pde2no;
+	physaddr_t pa;
+
+	// If freeing the current environment, switch to kern_pgdir
+	// before freeing the page directory, just in case the page
+	// gets reused.
+	if (e == curenv)
+	  load_satp_asid(PADDR(kern_pgdir), 0);
+
+	// Note the environment's demise.
+	//cprintf("[%08x] free env %08x\n", curenv ? curenv->env_id : 0, e->env_id);
+
+	// Flush all mapped pages in the user portion of the address space
+	static_assert(UTOP % PTSIZE == 0);
+	// you have to free the 4-level pages recrusively
+	// only look at mapped page tables
+	// PD0X is for the user definitly
+
+	pdeno = 0;
+	if (e->env_pgdir[pdeno] & PTE_V){
+	  // find the pa and va of the page table
+	  pa = PTE_ADDR(e->env_pgdir[pdeno]);
+	  pd1 = (pde_t*) KADDR(pa);
+
+	  for(pde1no = 0; pde1no <= PD1X(~0); pde1no++){
+
+		  // only look at mapped page tables
+	    if (!(pd1[pde1no] & PTE_V))
+		continue;
+
+	    pa   = PTE_ADDR(pd1[pde1no]);
+	    pd2   = (pde_t*) KADDR(pa);
+
+	    for(pde2no = 0; pde2no <= PD2X(~0); pde2no++){
+
+		// only look at mapped page tables
+		if (!(pd2[pde2no] & PTE_V))
+		    continue;
+
+
+		pa = PTE_ADDR(pd2[pde2no]);
+		pt = (pde_t*) KADDR(pa);
+
+		// unmap all PTEs in this page table
+		for (pteno = 0; pteno <= PTX(~0); pteno++) {
+		    if (pt[pteno] & PTE_V)
+		      page_remove(e->env_pgdir, PGADDR(pdeno, pde1no, pde2no, pteno, 0));
+		}
+		
+		// free the page table itself
+		pd2[pde2no] = 0;
+		page_decref(pa2page(pa));
+
+	    }
+
+	    // free the page table itself
+	    pd1[pde1no] = 0;
+	    page_decref(pa2page(pa));
+
+	  }
+
+	// free the page table itself
+	e->env_pgdir[pdeno] = 0;
+	page_decref(pa2page(pa));
+     }
+
+    // free the page directory
+    pa = PADDR(e->env_pgdir);
+    e->env_pgdir = 0;
+    page_decref(pa2page(pa));
+
+    // return the environment to the free list
+    e->env_status = ENV_FREE;
+    e->env_link = env_free_list;
+    env_free_list = e;
+}
+
+#+end_src
+
+I will do some necessary check to fix it, and some tests to it. The bug report is pa is used multiple times which causes the page to decref many times.
+
+** user-level page fault process
+The user level page fault process must handle the orig_a0 problem, in case of after ecall yield then page fault, when recovered from kernel mode and then jumped into pagefault entry, the entry address is plus 4 which causes invalid instruction error.
+
