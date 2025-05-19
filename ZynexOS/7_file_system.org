@@ -74,7 +74,6 @@ If we want to interact with shell, then we need a way to type it in u-mode, inte
 
 ** pipe
 ** re-direct output
-
 * Bug Report
 ** pp_ref clear not finished
 When the pp_ref is not zero, in bug cases, the pp_ref is 65535 (which is 0xffff in hex format), after add one value it will return zero, which causes some bugs hard to find.  Actually using *assert* is a great technique to quickly handle the bug when appearing.
