@@ -1,5 +1,5 @@
 * Build Options
-1. configuration
+** 1. configuration
 #+begin_src sh
   make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- menuconfig
 #+end_src
@@ -8,3 +8,10 @@
 #+begin_src sh
   make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- -j4
 #+end_src
+
+** 2. enable debug section
+kgdb options, if we don't specify the kernel gdb option, it won't generate debug info when we debug.
+The options are found at the Kernel Hacking.
+Kernel Hacking->
+  Kernel Debugging
+  
