@@ -1,0 +1,5 @@
+* github
+
+#+begin_src sh
+  git pull --rebase <your_repository_name> <your_branch>
+#+end_src

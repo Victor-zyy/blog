@@ -5,7 +5,6 @@ gdb + qemu + riscv + linux-kernel
   add-symbol-file vmlinux -s .head.text 0x80200000
 #+end_src
 ** pic / none-pic
-
 ** vmlinux
 load section
 #+begin_src
@@ -58,8 +57,9 @@ Sections
 
 #+end_src
 ** head.S
+*** _start
 _start symbol defined in arch/riscv/kernel/head.S
-
+if we defined the CONFIG_EFI, then load s4 = -13 this required by UEFI.
 #+begin_src asm
   __HEAD
   ENTRY(_start)
@@ -83,143 +83,367 @@ _start symbol defined in arch/riscv/kernel/head.S
   #endif
 #+end_src
 
-_start_kernel  arch/riscv/kernel/head.S
+*** _start_kernel
+arch/riscv/kernel/head.S
+**** disable interrupts
 #+begin_src asm
   ENTRY(_start_kernel)
   	/* Mask all interrupts */
   	csrw CSR_IE, zero
   	csrw CSR_IP, zero
-
+#+end_src
+**** load global pointer
+#+begin_src asm
   	/* Load the global pointer */
   .option push
   .option norelax
   	la gp, __global_pointer$
   .option pop
-
+#+end_src
+The __global_pointer$ defines in arch/riscv/kernel/linux/vmlinux.lds file, it pointes to the .sdata VMA address plus 0x800. Actually, using la to load address, when the pic is enabled, it is relative pc address.
+#+begin_src sh
+ .sdata : {
+  __global_pointer$ = . + 0x800;
+  *(.sdata*)
+ }
+#+end_src
+**** disable fpu
+#+begin_src asm
   	/*
   	 ,* Disable FPU to detect illegal usage of
   	 ,* floating point in kernel space
   	 ,*/
   	li t0, SR_FS
   	csrc CSR_STATUS, t0
+#+end_src
 
+**** SMP configuration
+The CONFIG_NR_CPUS defined in arch/riscv/Kconfig, it is a configuration of SMP,
+*platform type->*
+  *Maximum number of CPUS*
+#+begin_src asm
+#ifdef CONFIG_SMP
+	li t0, CONFIG_NR_CPUS
+	blt a0, t0, .Lgood_cores
+	tail .Lsecondary_park
+.Lgood_cores:
+#endif
+#+end_src
+The a0 stores the mhartid of cpuid that runs the kernel, if a0 < t0 here 8, the jump .Lgood_cores, we see it as BSP, then use lottery method to let one core to run the coldboot of kernel.
+**** lottery cold_boot
+Using *amoadd* instruction to make the lottery happen.
+#+begin_src asm
+#ifndef CONFIG_XIP_KERNEL
+    /* Pick one hart to run the main boot sequence */
+    la a3, hart_lottery
+    li a2, 1
+    amoadd.w a3, a2, (a3)
+    bnez a3, .Lsecondary_start
+#else
+#+end_src
+If one cpu doesn't get lottery it will jumps to .Lsecondary_start, if gets the lottery, it will then clear the bss doing the main coldboot of kernel.
+**** clear bss section
+#+begin_src asm
+#ifndef CONFIG_XIP_KERNEL
+    /* Clear BSS for flat non-ELF images */
+    la a3, __bss_start
+    la a4, __bss_stop
+    ble a4, a3, clear_bss_done
+clear_bss:
+    REG_S zero, (a3)
+    add a3, a3, RISCV_SZPTR
+    blt a3, a4, clear_bss
+clear_bss_done:
+#endif
+#+end_src
+**** save harid and dtb phy address
+a0 is the hartid, and a1 stores the dtb physical address.
+#+begin_src asm
+    /* Save hart ID and DTB physical address */
+    mv s0, a0
+    mv s1, a1
+#+end_src
+**** set the bootid number to boot_cpu_hartid 
+#+begin_src asm
+    la a2, boot_cpu_hartid
+    XIP_FIXUP_OFFSET a2
+    REG_S a0, (a2)
+#+end_src
+**** init_task
+defined in init/init_task.c file, using riscv tp register to points to it, and then do some initialization.
+struct task_struct is defined in *include/linux/sched.h*.
+#+begin_src c
+struct task_struct init_task
+#ifdef CONFIG_ARCH_TASK_STRUCT_ON_STACK
+    __init_task_data
+#endif
+    __aligned(L1_CACHE_BYTES)
+= {} EXPORT_SYMBOL(init_task)
+#+end_src
+The init_thread_union defined in arch/riscv/kernel/vmlinux.lds file, these instructions are aimed to setup the first task, sp points to stack of init_task, and tp points to init_task, and now a0 is the dtb phy address.
+#+begin_src asm
+    /* Initialize page tables and relocate to virtual addresses */
+    la tp, init_task
+    la sp, init_thread_union + THREAD_SIZE
+    XIP_FIXUP_OFFSET sp
+    mv a0, s1
+#+end_src
+The thread_union is defined in *include/linux/sched.h*, by searching the menuconfig, we can see that the CONFIG_ARCH_TASK_STRUCT_ON_STACK is false, and the CONFIG_THREAD_INFO_IN_TASK is true.
+#+begin_src c
+union thread_union {
+#ifndef CONFIG_ARCH_TASK_STRUCT_ON_STACK
+	struct task_struct task;
+#endif
+#ifndef CONFIG_THREAD_INFO_IN_TASK
+	struct thread_info thread_info;
+#endif
+	unsigned long stack[THREAD_SIZE/sizeof(long)];
+};
+#+end_src
+The task_stack is defined and allocated space in linker file, the kernel uses a union struct to store both the thread info and the thread stack. But we don't see the definition of the stack in any .c files.
 
-  #ifndef CONFIG_XIP_KERNEL
-  	/* Pick one hart to run the main boot sequence */
-  	la a3, hart_lottery
-  	li a2, 1
-  	amoadd.w a3, a2, (a3)
-  	bnez a3, .Lsecondary_start
+init_stack ->
+init_task   ->
+.data..init_task not defined
+.data..init_thread_info
+init_thread_union
+#+begin_src sh
+__start_init_task = .; init_thread_union = .; init_stack = .; KEEP(*(.data..init_task)) KEEP(*(.data..init_thread_info)) . = __start_init_task + ((1 << (12)) << (2 + 0)); __end_init_task = .;
+#+end_src
 
-  #else
-  	/* hart_lottery in flash contains a magic number */
-  	la a3, hart_lottery
-  	mv a2, a3
-  	XIP_FIXUP_OFFSET a2
-  	lw t1, (a3)
-  	amoswap.w t0, t1, (a2)
-  	/* first time here if hart_lottery in RAM is not set */
-  	beq t0, t1, .Lsecondary_start
+#+begin_src c
+arch/riscv/include/asm/thread_info.h
+#ifdef CONFIG_KASAN (0)
+#define KASAN_STACK_ORDER 1
+#else
+#define KASAN_STACK_ORDER 0
+#endif
 
-  	la sp, _end + THREAD_SIZE
-  	XIP_FIXUP_OFFSET sp
-  	mv s0, a0
-  	call __copy_data
+/* thread information allocation */
+#ifdef CONFIG_64BIT
+#define THREAD_SIZE_ORDER	(2 + KASAN_STACK_ORDER)
+#else
+#define THREAD_SIZE_ORDER	(1 + KASAN_STACK_ORDER)
+#endif
+#define THREAD_SIZE		(PAGE_SIZE << THREAD_SIZE_ORDER)
 
-  	/* Restore a0 copy */
-  	mv a0, s0
-  #endif
+arch/riscv/include/asm/page.h
+#define PAGE_SHIFT	(12)
+#define PAGE_SIZE	(_AC(1, UL) << PAGE_SHIFT)
+#define PAGE_MASK	(~(PAGE_SIZE - 1))
+#+end_src
 
-  #ifndef CONFIG_XIP_KERNEL
-  	/* Clear BSS for flat non-ELF images */
-  	la a3, __bss_start
-  	la a4, __bss_stop
-  	ble a4, a3, clear_bss_done
-  clear_bss:
-  	REG_S zero, (a3)
-  	add a3, a3, RISCV_SZPTR
-  	blt a3, a4, clear_bss
-  clear_bss_done:
-  #endif
-  	/* Save hart ID and DTB physical address */
-  	mv s0, a0
-  	mv s1, a1
+**** setup vm before relocate
+Firstly set the stvec to hold the vector entry in order to help debug, the setup_vm function is arch related which is defined in *arch/riscv/mm/init.c*
+#+begin_src asm
+    /* Set trap vector to spin forever to help debug */
+    la a3, .Lsecondary_park
+    csrw CSR_TVEC, a3
+    call setup_vm
+#+end_src
+***** initialize the kernel_mapping
 
-  	la a2, boot_cpu_hartid
-  	XIP_FIXUP_OFFSET a2
-  	REG_S a0, (a2)
+#+begin_src c
+//arch/riscv/mm/init.c
+struct kernel_mapping kernel_map __ro_after_init;
+EXPORT_SYMBOL(kernel_map);
+//arch/riscv/include/asm/page.h:
+struct kernel_mapping {
+    unsigned long virt_addr;
+    uintptr_t phys_addr;
+    uintptr_t size;
+    /* Offset between linear mapping virtual address and kernel load address */
+    unsigned long va_pa_offset;
+    /* Offset between kernel mapping virtual address and kernel load address */
+    unsigned long va_kernel_pa_offset;
+    unsigned long va_kernel_xip_pa_offset;
+#ifdef CONFIG_XIP_KERNEL
+    uintptr_t xiprom;
+    uintptr_t xiprom_sz;
+#endif
+};
+#+end_src
+***** initialize the pt_alloc_ops
+#+begin_src c
+#ifdef CONFIG_MMU
+static struct pt_alloc_ops _pt_ops __initdata;
 
-  	/* Initialize page tables and relocate to virtual addresses */
-  	la tp, init_task
-  	la sp, init_thread_union + THREAD_SIZE
-  	XIP_FIXUP_OFFSET sp
-  #ifdef CONFIG_BUILTIN_DTB
-  	la a0, __dtb_start
-  #else
-  	mv a0, s1
-  #endif /* CONFIG_BUILTIN_DTB */
-  	/* Set trap vector to spin forever to help debug */
-  	la a3, .Lsecondary_park
-  	csrw CSR_TVEC, a3
-  	call setup_vm
-  #ifdef CONFIG_MMU
-  	la a0, early_pg_dir
-  	XIP_FIXUP_OFFSET a0
-  	call relocate
-  #endif /* CONFIG_MMU */
+#ifdef CONFIG_XIP_KERNEL
+#define pt_ops (*(struct pt_alloc_ops *)XIP_FIXUP(&_pt_ops))
+#else
+#define pt_ops _pt_ops
+#+end_src
+***** initialize the pgdir table
+#+begin_src c
+./arch/riscv/include/asm/pgtable.h:#define PTRS_PER_PGD    (PAGE_SIZE / sizeof(pgd_t))
+pgd_t early_pg_dir[PTRS_PER_PGD] __initdata __aligned(PAGE_SIZE);
+#+end_src
+create_pgd_mapping
+#+begin_src c
 
-  	call setup_trap_vector
-  	/* Restore C environment */
-  	la tp, init_task
-  	sw zero, TASK_TI_CPU(tp)
-  	la sp, init_thread_union + THREAD_SIZE
+    /* Setup early PGD for fixmap */
+    create_pgd_mapping(early_pg_dir, FIXADDR_START,
+                        (uintptr_t)fixmap_pgd_next, PGDIR_SIZE, PAGE_TABLE);
 
-  #ifdef CONFIG_KASAN
-  	call kasan_early_init
-  #endif
-  	/* Start the kernel */
-  	call soc_early_init
-  	tail start_kernel
+#ifndef __PAGETABLE_PMD_FOLDED // this macro is defined for 32-bit arch
+    /* Setup fixmap PMD */
+    create_pmd_mapping(fixmap_pmd, FIXADDR_START,
+                        (uintptr_t)fixmap_pte, PMD_SIZE, PAGE_TABLE);
+    /* Setup trampoline PGD and PMD */
+    create_pgd_mapping(trampoline_pg_dir, kernel_map.virt_addr,
+                        (uintptr_t)trampoline_pmd, PGDIR_SIZE, PAGE_TABLE);
 
-  .Lsecondary_start:
-  #ifdef CONFIG_SMP
-  	/* Set trap vector to spin forever to help debug */
-  	la a3, .Lsecondary_park
-  	csrw CSR_TVEC, a3
+    create_pmd_mapping(trampoline_pmd, kernel_map.virt_addr,
+			   kernel_map.phys_addr, PMD_SIZE, PAGE_KERNEL_EXEC);
+#+end_src
+**** relocate early_pg_dir
+#+begin_src asm
+#ifdef CONFIG_MMU
+    la a0, early_pg_dir
+    XIP_FIXUP_OFFSET a0
+    call relocate
+#endif /* CONFIG_MMU */
+#+end_src
 
-  	slli a3, a0, LGREG
-  	la a1, __cpu_up_stack_pointer
-  	XIP_FIXUP_OFFSET a1
-  	la a2, __cpu_up_task_pointer
-  	XIP_FIXUP_OFFSET a2
-  	add a1, a3, a1
-  	add a2, a3, a2
+add ra with pa_va_offset when this function returns, it will goes around high address.
+#+begin_src asm
+.align 2
+#ifdef CONFIG_MMU
+relocate:
+	/* Relocate return address */
+	la a1, kernel_map
+	XIP_FIXUP_OFFSET a1
+	REG_L a1, KERNEL_MAP_VIRT_ADDR(a1)
+	la a2, _start
+	sub a1, a1, a2
+	add ra, ra, a1
+#+end_src
+In the same time, relocate the stvec to vma using add offset to it.
+#+begin_src asm
+	/* Point stvec to virtual address of intruction after satp write */
+	la a2, 1f
+	add a2, a2, a1
+	csrw CSR_TVEC, a2
+.align 2
+1:
+	/* Set trap vector to spin forever to help debug */
+	la a0, .Lsecondary_park
+	csrw CSR_TVEC, a0
+#+end_src
+Compute the satp value, actually the linux kernel use sv39 page-mapping technique.
+#+begin_src asm
+	/* Compute satp for kernel page tables, but don't load it yet */
+	srl a2, a0, PAGE_SHIFT
+	li a1, SATP_MODE
+	or a2, a2, a1
+#+end_src
+Load trampoline entry_pgdir to satp, instead of early_pg_dir, which will cause a instruction page_fault.
+#+begin_src asm
+	/*
+	 * Load trampoline page directory, which will cause us to trap to
+	 * stvec if VA != PA, or simply fall through if VA == PA.  We need a
+	 * full fence here because setup_vm() just wrote these PTEs and we need
+	 * to ensure the new translations are in use.
+	 */
+	la a0, trampoline_pg_dir
+	XIP_FIXUP_OFFSET a0
+	srl a0, a0, PAGE_SHIFT
+	or a0, a0, a1
+	sfence.vma
+	csrw CSR_SATP, a0
+#+end_src
+After setting up trampoline_pg_dir, we can use qemu info mem command to check, the page mappings like below.
+#+begin_src sh
+ffffffff80000000 0000000080200000 0000000000200000 rwx-gad
+#+end_src
+So, when exectues the next instruction below csrw, it will cause page-fault, then in the page fault-handler, the kernel will reassign the satp using the early_pg_dir here below.
+#+begin_src asm
+1:
+	/* Set trap vector to spin forever to help debug */
+	la a0, .Lsecondary_park
+	csrw CSR_TVEC, a0
 
-  	/*
-  	 ,* This hart didn't win the lottery, so we wait for the winning hart to
-  	 ,* get far enough along the boot process that it should continue.
-  	 ,*/
-  .Lwait_for_cpu_up:
-  	/* FIXME: We should WFI to save some energy here. */
-  	REG_L sp, (a1)
-  	REG_L tp, (a2)
-  	beqz sp, .Lwait_for_cpu_up
-  	beqz tp, .Lwait_for_cpu_up
-  	fence
+	/* Reload the global pointer */
+.option push
+.option norelax
+	la gp, __global_pointer$
+.option pop
 
-  	tail secondary_start_common
-  #endif
+	/*
+	 * Switch to kernel page tables.  A full fence is necessary in order to
+	 * avoid using the trampoline translations, which are only correct for
+	 * the first superpage.  Fetching the fence is guarnteed to work
+	 * because that first superpage is translated the same way.
+	 */
+	csrw CSR_SATP, a2
+	sfence.vma
 
-  END(_start_kernel)
+	ret
+  	
+#+end_src
+
+#+begin_src sh
+ffffffcefec00000 00000000bf600000 0000000000400000 rw--gad
+ffffffff80000000 0000000080200000 0000000001000000 rwx-gad
+#+end_src
+The linux kernel using this method to avoid the identical mapping which can reduce memory usage.
+
+**** setup_trap_vector
+
+ENTRY(handle_exception) defined in *arch/riscv/kernel/entry.S*
+#+begin_src asm
+.align 2
+setup_trap_vector:
+	/* Set trap vector to exception handler */
+	la a0, handle_exception
+	csrw CSR_TVEC, a0
+
+	/*
+	 * Set sup0 scratch register to 0, indicating to exception vector that
+	 * we are presently executing in kernel.
+	 */
+	csrw CSR_SCRATCH, zero
+	ret
+#+end_src
+**** restore C environment
+restore tp and sp
+#+begin_src asm
+    /* Restore C environment */
+    la tp, init_task
+    sw zero, TASK_TI_CPU(tp) //thread_info member
+    la sp, init_thread_union + THREAD_SIZE
+#+end_src
+**** soc_early_init
+This function is defined in *arch/riscv/kernel/soc.c*
+#+begin_src c
+      /* Start the kernel */
+      call soc_early_init
+  /*
+   ,* This is called extremly early, before parse_dtb(), to allow initializing
+   ,* SoC hardware before memory or any device driver initialization.
+   ,*/
+  void __init soc_early_init(void)
+  {
+  	void (*early_fn)(const void *fdt);
+  	const struct of_device_id *s;
+  	const void *fdt = dtb_early_va;
+
+  	for (s = (void *)&__soc_early_init_table_start;
+  	     (void *)s < (void *)&__soc_early_init_table_end; s++) {
+  		if (!fdt_node_check_compatible(fdt, 0, s->compatible)) {
+  			early_fn = s->data;
+  			early_fn(fdt);
+  			return;
+  		}
+  	}
+  }
+#+end_src
+**** start kernel
+using tail which is presudo instruction of jal zero, start_kernel, discarding the return address. defined in *init/main.c*
+#+begin_src asm
+  tail start_kernel
+asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
+{}
 #+end_src
 
 
-
-MTD layer
-#+begin_src
-[0.363406] physmap-flash physmap-flash.0: physmap platform flash device: [mem 0x20000000-0x21ffffff]
-[    0.366476] physmap-flash.0: Found 2 x16 devices at 0x0 in 32-bit bank. Manufacturer ID 0x000000 Chip ID 0x000000
-[    0.367813] Intel/Sharp Extended Query Table at 0x0031
-[    0.369342] Using buffer write method
-
-#+end_src
