@@ -1,0 +1,204 @@
+* Linux Kernel Module
+Two ways to add codes to linux kernel 
+- add the code to the kernel tree and recompile the kernel
+- loading the module (LKM) loadable kernel module at runtime
+
+LKM serve various services like:
+- device driver
+- filesystem driver
+- system call
+
+** device driver
+In unix, everything is seen as a file, like in */dev/* directory. The device driver is somewhat like a translation between user and device, it hides lots of details when we used in user application.
+Types:
+- character device driver
+  something like keyboard,serial port, etc.
+- block device driver
+  something like USB, CDROMS, etc.
+- network device driver
+  something like ethernet card, wifi,ble,etc.
+
+** filesystem driver
+there’s a filesystem driver for the ext2 filesystem type used almost universally on Linux disk drives. There is one for the MS-DOS filesystem too, and one for NFS. Actually I don't fully understand at first what it means for, I will explain it later in the future.
+** system call
+But you can invent a system call of your own and install it as an LKM. Or you can decide you don’t like the way Linux does something and override an existing system call with an LKM of your own.
+
+** difference of LKM and user appear
+- different privilege to exectue
+- different address space
+- execute not sequentially
+  LKM registered later on as a service provided to future requests.
+
+  
+* First LKM
+** License
+something like that, and you need to include <linux/module.h> file to add these information, when you use modinfo you can see what these are.
+#+begin_src c
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("victor-zyy <gt7591665@gmail.com>");
+MODULE_DESCRIPTION("A simple hello world driver");
+MODULE_VERSION("1:1.0");
+#+end_src
+** Programming
+Keep in mind that, kernel module can't invoke user level function calls like printf(),etc.
+*** init function
+When the ismod/modprobe executes, the first init function will exectue. Module_init is used to register this function.
+#+begin_src c
+static int __init hello_world_init(void)
+{
+    printk(KERN_INFO "Welcome to EmbeTronicX\n");
+    printk(KERN_INFO "This is the Simple Module\n");
+    printk(KERN_INFO "Kernel Module Inserted Successfully...\n");
+    return 0;
+}
+module_init(hello_world_init);
+#+end_src
+*** exit function
+When unloading the module using *rmmod*, the function will execute, in the same way registered by Module_exit macro.
+#+begin_src c
+static void __exit hello_world_exit(void)
+{
+    printk(KERN_INFO "Kernel Module Removed Successfully...\n");
+}
+ 
+module_exit(hello_world_exit);
+#+end_src
+*** printk
+Instead of using printf user level function, we have to use printk in kernel mode, but printk gives a varity of macro to indicate which log level to print.
+#+begin_src c
+//include/linux/kernel-levels.h
+#define KERN_EMERG	KERN_SOH "0"	/* system is unusable */
+#define KERN_ALERT	KERN_SOH "1"	/* action must be taken immediately */
+#define KERN_CRIT	KERN_SOH "2"	/* critical conditions */
+#define KERN_ERR	KERN_SOH "3"	/* error conditions */
+#define KERN_WARNING	KERN_SOH "4"	/* warning conditions */
+#define KERN_NOTICE	KERN_SOH "5"	/* normal but significant condition */
+#define KERN_INFO	KERN_SOH "6"	/* informational */
+#define KERN_DEBUG	KERN_SOH "7"	/* debug-level messages */
+
+#define KERN_DEFAULT	""		/* the default kernel loglevel */
+#+end_src
+- KERN_EMERG:
+Used for emergency messages, usually those that precede a crash.
+- KERN_ALERT:
+A situation requiring immediate action.
+- KERN_DEBUG:
+Used for debugging messages
+- KERN_CRIT:
+Critical conditions are often related to serious hardware or software failures.
+- KERN_ERR:
+Used to report error conditions; device drivers often use KERN_ERR to report hardware difficulties.
+- KERN_WARNING
+Warnings about problematic situations that do not, in themselves, create serious problems with the system.
+- KERN_NOTICE:
+Situations that are normal, but still worthy of note. A number of security-related conditions are reported at this level.
+- KERN_INFO:
+Informational messages. Many drivers print information about the hardware they find at startup time at this level.
+- KERN_DEBUG:
+Used for debugging messages.
+
+But they can be replaced by pr_functions like pr_info, pr_err,etc. Here are the examples below.
+#+begin_src c
+//include/linux/printk.h
+/**
+ * pr_notice - Print a notice-level message
+ * @fmt: format string
+ * @...: arguments for the format string
+ *
+ * This macro expands to a printk with KERN_NOTICE loglevel. It uses pr_fmt() to
+ * generate the format string.
+ */
+#define pr_notice(fmt, ...) \
+	printk(KERN_NOTICE pr_fmt(fmt), ##__VA_ARGS__)
+/**
+ * pr_info - Print an info-level message
+ * @fmt: format string
+ * @...: arguments for the format string
+ *
+ * This macro expands to a printk with KERN_INFO loglevel. It uses pr_fmt() to
+ * generate the format string.
+ */
+#define pr_info(fmt, ...) \
+	printk(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__)
+
+#+end_src
+
+** compile
+
+#+begin_src makefile
+obj-m += hello_world.o
+
+#You can update your Beaglebone path here.
+KDIR = /home/zyy/repo/linux-5.15.175/
+
+all:
+	make -C $(KDIR)  M=$(shell pwd) modules
+clean:
+	make -C $(KDIR)  M=$(shell pwd) clean
+#+end_src
+
+** result
+All these command must build on the lib/modules/(linux-version)/*.ko, only in this way, call the information be created. And modues.dep for modinfo is necessary which is grenerated by depmod.
+*** modprobe
+#+begin_src sh
+~ # modprobe hello_world
+[  625.692155] Welcome to the beachworld
+[  625.692512] This is the Simple Module
+[  625.692778] Kernel Module Inserted Successfully...
+~ # 
+#+end_src
+Remove the kernel_module
+#+begin_src sh
+~ # modprobe -r hello_world
+[  702.742510] Kernel Module Removed Successfully...
+~ # 
+#+end_src
+*** insmod
+#+begin_src sh
+  ~ # insmod hello_world.ko 
+[   30.298124] hello_world: loading out-of-tree module taints kernel.
+[   30.319200] Welcome to the beachworld
+[   30.319562] This is the Simple Module
+[   30.319805] Kernel Module Inserted Successfully.
+#+end_src
+*** dmesg
+#+begin_src sh
+~ # dmesg
+[   30.298124] hello_world: loading out-of-tree module taints kernel.
+[   30.319200] Welcome to the beachworld
+[   30.319562] This is the Simple Module
+[   30.319805] Kernel Module Inserted Successfully...
+#+end_src
+*** modinfo
+#+begin_src sh
+~ # modinfo hello_world.ko 
+modinfo: can't open '/lib/modules/5.15.175/modules.dep': No such file or directory
+
+#+end_src
+*** depmod
+We have to create the dir like /lib/modules/(linux-version)/, then move the *.ko to this directory and then use this command to generate modules.dep file. Only after that, does the modinfo command successfully generate kernel module info like this below.
+#+begin_src sh
+/lib/modules/5.15.175 # modinfo hello_world
+modinfo: can't open '/lib/modules/5.15.175/modules.dep': No such file or directory
+/lib/modules/5.15.175 # cat modules.dep.bb 
+hello_world.ko
+/lib/modules/5.15.175 # mv modules.dep.bb modules.dep
+/lib/modules/5.15.175 # modinfo hello_world
+modinfo: module '/lib/modules/5.15.175/hello_world' not found
+/lib/modules/5.15.175 # modinfo hello_world.ko 
+filename:       hello_world.ko
+author:         victor-zyy <gt7591665@gmail.com>
+description:    A simple hello world driver
+license:        GPL
+version:        1:1.0
+srcversion:     ADB5DAF70B80E109AC48F6A
+depends:        
+vermagic:       5.15.175 SMP mod_unload riscv
+/lib/modules/5.15.175 # 
+#+end_src
+*** rmmod
+#+begin_src sh
+~ # rmmod hello_world
+[  460.658494] Kernel Module Removed Successfully...
+~ # 
+#+end_src
