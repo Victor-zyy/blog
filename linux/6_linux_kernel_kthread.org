@@ -1,0 +1,89 @@
+* Linux Kthread 
+There are two forms of thread in linux world, one is uthread managed by user-thread library, the other one is kthread which is managed by OS aka linux kernel. And user level threads are ignored by OS, since the thread is the minimum unit for cpu to schedule, it is more efficient and low-weight, but it also has pros like
+*TODO*.
+* Kernel Thread Programming
+** kthread_create
+kthread_create is a helper macro for create kthread defined in *kernel/kthread.c*
+#+begin_src c
+__printf(4, 5) // cause the compiler to check args like printf(,...)
+struct task_struct *kthread_create_on_node(int (*threadfn)(void *data),
+					   void *data,
+					   int node,
+					   const char namefmt[], ...);
+/**
+ * kthread_create - create a kthread on the current node
+ * @threadfn: the function to run in the thread
+ * @data: data pointer for @threadfn()
+ * @namefmt: printf-style format string for the thread name
+ * @arg: arguments for @namefmt.
+ *
+ * This macro will create a kthread on the current node, leaving it in
+ * the stopped state.  This is just a helper for kthread_create_on_node();
+ * see the documentation there for more details.
+ */
+#define kthread_create(threadfn, data, namefmt, arg...) \
+	kthread_create_on_node(threadfn, data, NUMA_NO_NODE, namefmt, ##arg)
+#+end_src
+
+#+begin_src c
+/include/linux/numa.h:14:#define	NUMA_NO_NODE	(-1)
+#+end_src
+** kthread start up
+wake_up_process is defined in *kernel/sched/core.c*
+#+begin_src c
+/**
+ * wake_up_process - Wake up a specific process
+ * @p: The process to be woken up.
+ *
+ * Attempt to wake up the nominated process and move it to the set of runnable
+ * processes.
+ *
+ * Return: 1 if the process was woken up, 0 if it was already running.
+ *
+ * This function executes a full memory barrier before accessing the task state.
+ */
+int wake_up_process(struct task_struct *p)
+{
+	return try_to_wake_up(p, TASK_NORMAL, 0);
+}
+EXPORT_SYMBOL(wake_up_process);
+#+end_src
+** stop kernel thread
+#+begin_src c
+/**
+ * kthread_stop - stop a thread created by kthread_create().
+ * @k: thread created by kthread_create().
+ *
+ * Sets kthread_should_stop() for @k to return true, wakes it, and
+ * waits for it to exit. This can also be called after kthread_create()
+ * instead of calling wake_up_process(): the thread will exit without
+ * calling threadfn().
+ *
+ * If threadfn() may call kthread_exit() itself, the caller must ensure
+ * task_struct can't go away.
+ *
+ * Returns the result of threadfn(), or %-EINTR if wake_up_process()
+ * was never called.
+ */
+int kthread_stop(struct task_struct *k)
+#+end_src
+** thread_bind
+Bind a just created kthread to a specific cpu.
+#+begin_src c
+/**
+ * kthread_bind - bind a just-created kthread to a cpu.
+ * @p: thread created by kthread_create().
+ * @cpu: cpu (might not be online, must be possible) for @k to run on.
+ *
+ * Description: This function is equivalent to set_cpus_allowed(),
+ * except that @cpu doesn't need to be online, and the thread must be
+ * stopped (i.e., just returned from kthread_create()).
+ */
+void kthread_bind(struct task_struct *p, unsigned int cpu)
+{
+	__kthread_bind(p, cpu, TASK_UNINTERRUPTIBLE);
+}
+EXPORT_SYMBOL(kthread_bind);
+#+end_src
+
+* 
