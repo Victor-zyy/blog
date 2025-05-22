@@ -1,0 +1,192 @@
+* Character Device Driver Major number and Minor number
+Most of the drivers are for byte-oriented, like usb-driver, serial-driver,etc. In a word, all device drivers that are neither storage nor network device drivers are some type of character driver.
+** user app interact with driver
+The image shows up the interaction between app and driver (hardware).
+[[file::./static/linux_driver/images/8_app_interact_driver.png]]
+Firstly, the app will open the device file created by the linux driver.
+Then, the device file can correspond to related linux driver by major:minor number.
+After that, read/write operations are allowed by app.
+Finally, the device driver will talk to the real hardware.
+** major number
+To see the sysfs /proc/devices we can see the major number in out linux distribution, ubuntu. And it will list char devices and block devices. The number shown below are major number.
+#+begin_src sh
+zyy@ubuntu:~$ cat /proc/devices 
+Character devices:
+  1 mem
+  4 /dev/vc/0
+  4 tty
+  4 ttyS
+  5 /dev/tty
+  5 /dev/console
+  5 /dev/ptmx
+  5 ttyprintk
+  6 lp
+Block devices:
+  7 loop
+  8 sd
+  9 md
+ 11 sr
+ 65 sd
+ 66 sd
+ 67 sd
+
+#+end_src
+
+If we list in /dev/ file, we can see the major number and minor number the same as above, but the driver has to create special files.
+#+begin_src sh
+zyy@ubuntu:~$ ls -l  /dev/tty
+crw-rw-rw- 1 root tty 5, 0 May 22 09:27 /dev/tty
+#+end_src
+
+
+** minor number
+The major number is to identify the corresponding driver. Many devices may use the same major number. So we need to assign the number to each device that is using the same major number. So, this is a minor number. In other words, The device driver uses the minor number <minor> to distinguish individual physical or logical devices.
+** allocate major and minor number
+*** statically allocating
+#+begin_src c
+fs/char_dev.c:674:EXPORT_SYMBOL(register_chrdev_region);
+/**
+ * register_chrdev_region() - register a range of device numbers
+ * @from: the first in the desired range of device numbers; must include
+ *        the major number.
+ * @count: the number of consecutive device numbers required
+ * @name: the name of the device or driver.
+ *
+ * Return value is zero on success, a negative error code on failure.
+ */
+int register_chrdev_region(dev_t from, unsigned count, const char *name)
+#+end_src
+The dev_t is 32bit integer, and 20 for minor, the left 12bits for major.
+#+begin_src c
+#define MINORBITS	20
+#define MINORMASK	((1U << MINORBITS) - 1)
+
+#define MAJOR(dev)	((unsigned int) ((dev) >> MINORBITS))
+#define MINOR(dev)	((unsigned int) ((dev) & MINORMASK))
+#define MKDEV(ma,mi)	(((ma) << MINORBITS) | (mi))
+#+end_src
+#+begin_src c
+typedef u32 __kernel_dev_t;
+
+typedef __kernel_fd_set		fd_set;
+typedef __kernel_dev_t		dev_t;
+#+end_src
+*** dynamically allocating
+#+begin_src c
+/**
+ * alloc_chrdev_region() - register a range of char device numbers
+ * @dev: output parameter for first assigned number
+ * @baseminor: first of the requested range of minor numbers
+ * @count: the number of minor numbers required
+ * @name: the name of the associated device or driver
+ *
+ * Allocates a range of char device numbers.  The major number will be
+ * chosen dynamically, and returned (along with the first minor number)
+ * in @dev.  Returns zero or a negative error code.
+ */
+int alloc_chrdev_region(dev_t *dev, unsigned baseminor, unsigned count,
+			const char *name)
+#+end_src
+** unregister
+You have to unregister it when the kernel module exit.
+#+begin_src c
+/**
+ * unregister_chrdev_region() - unregister a range of device numbers
+ * @from: the first in the range of numbers to unregister
+ * @count: the number of device numbers to unregister
+ *
+ * This function will unregister a range of @count device numbers,
+ * starting with @from.  The caller should normally be the one who
+ * allocated those numbers in the first place...
+ */
+void unregister_chrdev_region(dev_t from, unsigned count)
+#+end_src
+* Template
+** statically register
+Code like that below.
+#+begin_src c
+#include<linux/kernel.h>
+#include<linux/init.h>
+#include<linux/module.h>
+#include <linux/fs.h>
+
+//creating the dev with our custom major and minor number
+dev_t dev = MKDEV(235, 0);
+
+/*
+**Module Init function
+*/
+static int __init hello_world_init(void)
+{
+    register_chrdev_region(dev, 1, "HELLO_Dev");
+    printk(KERN_INFO "Major = %d Minor = %d \n",MAJOR(dev), MINOR(dev));
+    printk(KERN_INFO "Kernel Module Inserted Successfully...\n");
+    return 0;
+}
+
+/*
+**Module exit function
+*/
+static void __exit hello_world_exit(void)
+{
+    unregister_chrdev_region(dev, 1);
+    printk(KERN_INFO "Kernel Module Removed Successfully...\n");
+}
+ 
+module_init(hello_world_init);
+module_exit(hello_world_exit);
+#+end_src
+#+begin_src sh
+  ~ # ls /lib/modules/5.15.175/hello*
+/lib/modules/5.15.175/hello-reg.ko    /lib/modules/5.15.175/hello_world.ko
+/lib/modules/5.15.175/hello_arg.ko
+~ # modprobe hello-reg
+[   28.444488] hello_reg: loading out-of-tree module taints kernel.
+[   28.465901] Major = 235 Minor = 0 
+[   28.466423] Kernel Module Inserted Successfully...
+235 HELLO_Dev
+#+end_src
+** dynamically register
+Code like that below.
+#+begin_src c
+dev_t dev = 0;
+
+/*
+*Module Init function
+*/
+static int __init hello_world_init(void)
+{
+        /*Allocating Major number*/
+        if((alloc_chrdev_region(&dev, 0, 1, "Hello_Dev")) <0){
+                printk(KERN_INFO "Cannot allocate major number for device 1\n");
+                return -1;
+        }
+        printk(KERN_INFO "Major = %d Minor = %d \n",MAJOR(dev), MINOR(dev));
+        printk(KERN_INFO "Kernel Module Inserted Successfully...\n");
+        
+        return 0;
+}
+
+/*
+**Module exit function
+*/
+static void __exit hello_world_exit(void)
+{
+        unregister_chrdev_region(dev, 1);
+        printk(KERN_INFO "Kernel Module Removed Successfully...\n");
+}
+ 
+module_init(hello_world_init);
+module_exit(hello_world_exit);
+#+end_src
+
+#+begin_src sh
+~ # modprobe hello-regd
+[   39.087562] hello_regd: loading out-of-tree module taints kernel.
+[   39.109362] Major = 249 Minor = 0 
+[   39.109785] Kernel Module Inserted Successfully...
+~ # 
+249 Hello_Dev
+#+end_src
+
+
