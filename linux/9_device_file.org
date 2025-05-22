@@ -1,0 +1,239 @@
+* Device File
+The device files reside in /dev/ directory corresponding either device or special meaning in our system. And you can use ls -l option to list the full characteristics of a file like below.
+#+begin_src sh
+~ # ls -l /dev/ttyb0
+crw-rw----    1 0        0           3, 192 Jan  1  1970 /dev/ttyb0
+~ # ls -l /dev/ttyS
+ttyS0  ttyS1  ttyS2  ttyS3
+~ # ls -l /dev/ttyS0
+crw-rw----    1 0        0           4,  64 Jan  1  1970 /dev/ttyS0
+#+end_src
+First of all, note that the first letter of the permissions field is denoted as driver type. Device files are denoted either by b, for block devices, or c, for character devices.
+
+The device files are generally created during system installation and include every possible device driver. They don’t necessarily correspond to the actual hardware on your system. There are a number of pseudo-devices in /dev that don’t correspond to any actual peripheral
+
+Like I did before, I wanna communicate with a bluetooth, then I searched online, it tells me to create rfcomm device file using a particular command. In Unix system, everything is a file, so interacting with device or hardware is interacting with a file, you can open/write/read/mmap on it.
+
+** create device file
+*** manually
+using command mknod
+#+begin_src sh
+mknod -m <permissions> <name> <device type> <major> <minor>
+
+<name> – Your device file name that should have a full path (/dev/name)
+
+<device type> – Put c or b
+
+c – Character Device
+
+b – Block Device
+
+<major> – major number of your driver
+
+<minor> – minor number of your driver
+
+-m <permissions> – optional argument that sets the permission bits of the new device file to permissions
+Example:
+sudo mknod -m 666 /dev/etx_device c 246 0
+#+end_src
+If you don’t want to give permission, You can also use chmod to set the permissions for a device file after creation.
+
+Advantage:
+- anyone can create device file.
+- the device file can be created before the linux kernel module is loaded.
+
+*** automatically
+Udev is the device manager for the Linux kernel that creates/removes device nodes in the /dev directory dynamically. Just follow the below steps.
+- Include the header file linux/device.h and linux/kdev_t.h
+- Create the struct Class
+- Create Device with the class which is created by the above
+The method will create a structure in /sys/class/, after that 
+**** create class
+#+begin_src c
+//include/linux/device/class.h
+/**
+ * class_create - create a struct class structure
+ * @owner: pointer to the module that is to "own" this struct class
+ * @name: pointer to a string for the name of this class.
+ *
+ * This is used to create a struct class pointer that can then be used
+ * in calls to device_create().
+ *
+ * Returns &struct class pointer on success, or ERR_PTR() on error.
+ *
+ * Note, the pointer created here is to be destroyed when finished by
+ * making a call to class_destroy().
+ */
+#define class_create(owner, name)		\
+({						\
+	static struct lock_class_key __key;	\
+	__class_create(owner, name, &__key);	\
+})
+#+end_src
+defined in drivers/base/class.c file 
+#+begin_src c
+/**
+ * class_destroy - destroys a struct class structure
+ * @cls: pointer to the struct class that is to be destroyed
+ *
+ * Note, the pointer to be destroyed must have been created with a call
+ * to class_create().
+ */
+void class_destroy(struct class *cls)
+{
+	if ((cls == NULL) || (IS_ERR(cls)))
+		return;
+
+	class_unregister(cls);
+}
+#+end_src
+**** create device
+#+begin_src c
+//include/linux/device.h
+/**
+ * device_create - creates a device and registers it with sysfs
+ * @class: pointer to the struct class that this device should be registered to
+ * @parent: pointer to the parent struct device of this new device, if any
+ * @devt: the dev_t for the char device to be added
+ * @drvdata: the data to be added to the device for callbacks
+ * @fmt: string for the device's name
+ *
+ * This function can be used by char device classes.  A struct device
+ * will be created in sysfs, registered to the specified class.
+ *
+ * A "dev" file will be created, showing the dev_t for the device, if
+ * the dev_t is not 0,0.
+ * If a pointer to a parent struct device is passed in, the newly created
+ * struct device will be a child of that device in sysfs.
+ * The pointer to the struct device will be returned from the call.
+ * Any further sysfs files that might be required can be created using this
+ * pointer.
+ *
+ * Returns &struct device pointer on success, or ERR_PTR() on error.
+ *
+ * Note: the struct class passed to this function must have previously
+ * been created with a call to class_create().
+ */
+struct device *device_create(struct class *class, struct device *parent,
+			     dev_t devt, void *drvdata, const char *fmt, ...)
+void device_destroy(struct class *cls, dev_t devt);
+#+end_src
+* Template
+** manually
+#+begin_src c
+dev_t dev = 0;
+
+/*
+**Module init function
+*/
+static int __init hello_world_init(void)
+{
+        /*Allocating Major number*/
+        if((alloc_chrdev_region(&dev, 0, 1, "Hello_Dev")) <0){
+                pr_err("Cannot allocate major number for device\n");
+                return -1;
+        }
+        pr_info("Kernel Module Inserted Successfully...\n");
+        return 0;
+}
+
+/*
+**Module exit function
+*/
+static void __exit hello_world_exit(void)
+{
+        unregister_chrdev_region(dev, 1);
+        pr_info("Kernel Module Removed Successfully...\n");
+}
+ 
+module_init(hello_world_init);
+module_exit(hello_world_exit);
+#+end_src
+Using the mknod command line in the shell we can create the char dev file.
+#+begin_src sh
+~ # mknod -m 660 /dev/hello c 249 0
+~ # ls -l /dev/hello 
+crw-rw----    1 0        0         249,   0 May 22 11:52 /dev/hello
+#+end_src
+** automatically
+#+begin_src c
+#include <linux/kernel.h>
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/kdev_t.h>
+#include <linux/fs.h>
+#include <linux/err.h>
+#include <linux/device.h>
+ 
+dev_t dev = 0;
+static struct class *dev_class;
+ 
+/*
+**Module init function
+*/
+static int __init hello_world_init(void)
+{
+        /*Allocating Major number*/
+        if((alloc_chrdev_region(&dev, 0, 1, "etx_Dev")) <0){
+                pr_err("Cannot allocate major number for device\n");
+                return -1;
+        }
+        pr_info("Major = %d Minor = %d \n",MAJOR(dev), MINOR(dev));
+ 
+        /*Creating struct class*/
+        dev_class = class_create(THIS_MODULE,"etx_class");
+        if(IS_ERR(dev_class)){
+            pr_err("Cannot create the struct class for device\n");
+            goto r_class;
+        }
+ 
+        /*Creating device*/
+        if(IS_ERR(device_create(dev_class,NULL,dev,NULL,"etx_device"))){
+            pr_err("Cannot create the Device\n");
+            goto r_device;
+        }
+        pr_info("Kernel Module Inserted Successfully...\n");
+        return 0;
+ 
+r_device:
+        class_destroy(dev_class);
+r_class:
+        unregister_chrdev_region(dev,1);
+        return -1;
+}
+ 
+/*
+**Module exit function
+*/
+static void __exit hello_world_exit(void)
+{
+        device_destroy(dev_class,dev);
+        class_destroy(dev_class);
+        unregister_chrdev_region(dev, 1);
+        pr_info("Kernel Module Removed Successfully...\n");
+}
+ 
+module_init(hello_world_init);
+module_exit(hello_world_exit);
+#+end_src
+It will create a structure in sys/class directory, the name is what we set in create_class function.
+#+begin_src sh
+~ # modprobe hello-devd
+[   23.409213] hello_devd: loading out-of-tree module taints kernel.
+[   23.430089] Major = 249 Minor = 0 
+[   23.431366] Kernel Module Inserted Successfully...
+
+~ # ls /sys/class/etx_class/etx_device/ 
+dev        subsystem  uevent
+~ # 
+#+end_src
+If we see the dev file in this directory, it is our driver major:minor number.
+#+begin_src sh
+~ # cat /sys/class/etx_class/etx_device/dev 
+249:0
+~ # 
+
+~ # ls -l /dev/etx_device 
+crw-------    1 0        0         249,   0 May 22 12:21 /dev/etx_device
+~ # 
+#+end_src
