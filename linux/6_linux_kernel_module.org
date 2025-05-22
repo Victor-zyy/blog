@@ -176,7 +176,7 @@ modinfo: can't open '/lib/modules/5.15.175/modules.dep': No such file or directo
 
 #+end_src
 *** depmod
-We have to create the dir like /lib/modules/(linux-version)/, then move the *.ko to this directory and then use this command to generate modules.dep file. Only after that, does the modinfo command successfully generate kernel module info like this below.
+We have to create the dir like /lib/modules/(linux-version)/, then move the *.ko to this directory and then use this command to generate modules.dep file. Only after that, does the modinfo command successfully generate kernel module info like this below. Just cd /lib/modules/(linux-version)/ to run this depmod command.
 #+begin_src sh
 /lib/modules/5.15.175 # modinfo hello_world
 modinfo: can't open '/lib/modules/5.15.175/modules.dep': No such file or directory

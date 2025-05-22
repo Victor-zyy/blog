@@ -240,7 +240,7 @@ double imag() {return im;}
 // example
 {
  const complex c1(2,1)
- cout << c1.real(); // error conflict!
+ cout << c1.real(); 
  cout << c1.imag();
 }
 #+end_src
