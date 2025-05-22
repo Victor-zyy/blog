@@ -1,0 +1,258 @@
+* Passing Args to Linux Device Driver
+In C program, we can pass args by argc, argv, the argc and argv are passed by the OS, (loader). In case of Linux driver module, can we pass them too? The answer will be definitely yes.
+
+** permissions of variables
+The permissions macro is defined in *include/uapi/linux/stat.h* file like below,
+#+begin_src c
+#define S_IRWXU 00700
+#define S_IRUSR 00400
+#define S_IWUSR 00200
+#define S_IXUSR 00100
+
+#define S_IRWXG 00070
+#define S_IRGRP 00040
+#define S_IWGRP 00020
+#define S_IXGRP 00010
+
+#define S_IRWXO 00007
+#define S_IROTH 00004
+#define S_IWOTH 00002
+#define S_IXOTH 00001
+#+end_src
+All permissions started with S_I, then after that is permissions like X for executable, W for writtabel, R for readable. the latter three behind is Group or USER, OTH for other.
+
+** macro necessary
+These macro helps us to declare variables passing to the kernel module. defined in *include/linux/moduleparam.h*
+*** module_param
+#+begin_src c
+/**
+ * module_param - typesafe helper for a module/cmdline parameter
+ * @name: the variable to alter, and exposed parameter name.
+ * @type: the type of the parameter
+ * @perm: visibility in sysfs.
+ *
+ * @name becomes the module parameter, or (prefixed by KBUILD_MODNAME and a
+ * ".") the kernel commandline parameter.  Note that - is changed to _, so
+ * the user can use "foo-bar=1" even for variable "foo_bar".
+ *
+ * @perm is 0 if the variable is not to appear in sysfs, or 0444
+ * for world-readable, 0644 for root-writable, etc.  Note that if it
+ * is writable, you may need to use kernel_param_lock() around
+ * accesses (esp. charp, which can be kfreed when it changes).
+ *
+ * The @type is simply pasted to refer to a param_ops_##type and a
+ * param_check_##type: for convenience many standard types are provided but
+ * you can create your own by defining those variables.
+ *
+ * Standard types are:
+ *	byte, hexint, short, ushort, int, uint, long, ulong
+ *	charp: a character pointer
+ *	bool: a bool, values 0/1, y/n, Y/N.
+ *	invbool: the above, only sense-reversed (N = true).
+ */
+#define module_param(name, type, perm)				\
+	module_param_named(name, name, type, perm)
+#+end_src
+It will create subdirectory in sys/module/,
+*** module_parm_array
+#+begin_src c
+/**
+ * module_param_array - a parameter which is an array of some type
+ * @name: the name of the array variable
+ * @type: the type, as per module_param()
+ * @nump: optional pointer filled in with the number written
+ * @perm: visibility in sysfs
+ *
+ * Input and output are as comma-separated values.  Commas inside values
+ * don't work properly (eg. an array of charp).
+ *
+ * ARRAY_SIZE(@name) is used to determine the number of elements in the
+ * array, so the definition must be visible.
+ */
+#define module_param_array(name, type, nump, perm)		\
+	module_param_array_named(name, name, type, nump, perm)
+#+end_src
+
+*** module_param_cb
+Function call-back whenever the value of the variable has changed.
+If you want to get a notification whenever the value got to change, we need to register our handler function to its file operation structure first.
+The operation structure list is declared in */include/linux/moduleparam.h*
+#+begin_src c
+struct kernel_param_ops {
+	/* How the ops should behave */
+	unsigned int flags;
+	/* Returns 0, or -errno.  arg is in kp->arg. */
+	int (*set)(const char *val, const struct kernel_param *kp);
+	/* Returns length written or -errno.  Buffer is 4k (ie. be short!) */
+	int (*get)(char *buffer, const struct kernel_param *kp);
+	/* Optional function to free kp->arg when module unloaded. */
+	void (*free)(void *arg);
+};
+/**
+ * module_param_cb - general callback for a module/cmdline parameter
+ * @name: a valid C identifier which is the parameter name.
+ * @ops: the set & get operations for this parameter.
+ * @arg: args for @ops
+ * @perm: visibility in sysfs.
+ *
+ * The ops can have NULL set or get functions.
+ */
+#define module_param_cb(name, ops, arg, perm)				      \
+	__module_param_call(MODULE_PARAM_PREFIX, name, ops, arg, perm, -1, 0)
+#+end_src
+
+*** param_set_int
+The param_set_int function is defined in *kernel/params.c*, and use this macro to define many types of C identifier like that below.
+#+begin_src c
+/* Lazy bastard, eh? */
+#define STANDARD_PARAM_DEF(name, type, format, strtolfn)      		\
+	int param_set_##name(const char *val, const struct kernel_param *kp) \
+	{								\
+		return strtolfn(val, 0, (type *)kp->arg);		\
+	}								\
+	int param_get_##name(char *buffer, const struct kernel_param *kp) \
+	{								\
+		return scnprintf(buffer, PAGE_SIZE, format "\n",	\
+				*((type *)kp->arg));			\
+	}								\
+	const struct kernel_param_ops param_ops_##name = {			\
+		.set = param_set_##name,				\
+		.get = param_get_##name,				\
+	};								\
+	EXPORT_SYMBOL(param_set_##name);				\
+	EXPORT_SYMBOL(param_get_##name);				\
+	EXPORT_SYMBOL(param_ops_##name)
+
+
+STANDARD_PARAM_DEF(byte,	unsigned char,		"%hhu",		kstrtou8);
+STANDARD_PARAM_DEF(short,	short,			"%hi",		kstrtos16);
+STANDARD_PARAM_DEF(ushort,	unsigned short,		"%hu",		kstrtou16);
+STANDARD_PARAM_DEF(int,		int,			"%i",		kstrtoint);
+STANDARD_PARAM_DEF(uint,	unsigned int,		"%u",		kstrtouint);
+STANDARD_PARAM_DEF(long,	long,			"%li",		kstrtol);
+STANDARD_PARAM_DEF(ulong,	unsigned long,		"%lu",		kstrtoul);
+STANDARD_PARAM_DEF(ullong,	unsigned long long,	"%llu",		kstrtoull);
+STANDARD_PARAM_DEF(hexint,	unsigned int,		"%#08x", 	kstrtouint);
+#+end_src
+* Template
+** hello_arg.c
+#+begin_src c
+  
+#include<linux/kernel.h>
+#include<linux/init.h>
+#include<linux/module.h>
+#include<linux/moduleparam.h>
+ 
+int valueETX, arr_valueETX[4];
+char *nameETX;
+int cb_valueETX = 0;
+ 
+module_param(valueETX, int, S_IRUSR|S_IWUSR);                      //integer value
+module_param(nameETX, charp, S_IRUSR|S_IWUSR);                     //String
+module_param_array(arr_valueETX, int, NULL, S_IRUSR|S_IWUSR);      //Array of integers
+ 
+/*----------------------Module_param_cb()--------------------------------*/
+int notify_param(const char *val, const struct kernel_param *kp)
+{
+        int res = param_set_int(val, kp); // Use helper for write variable
+        if(res==0) {
+                printk(KERN_INFO "Call back function called...\n");
+                printk(KERN_INFO "New value of cb_valueETX = %d\n", cb_valueETX);
+                return 0;
+        }
+        return -1;
+}
+ 
+const struct kernel_param_ops my_param_ops = 
+{
+        .set = &notify_param, // Use our setter ...
+        .get = &param_get_int, // .. and standard getter
+};
+ 
+module_param_cb(cb_valueETX, &my_param_ops, &cb_valueETX, S_IRUGO|S_IWUSR );
+/*-------------------------------------------------------------------------*/
+
+/*
+*Module init function
+*/
+static int __init hello_world_init(void)
+{
+        int i;
+        printk(KERN_INFO "ValueETX = %d  \n", valueETX);
+        printk(KERN_INFO "cb_valueETX = %d  \n", cb_valueETX);
+        printk(KERN_INFO "NameETX = %s \n", nameETX);
+        for (i = 0; i < (sizeof arr_valueETX / sizeof (int)); i++) {
+                printk(KERN_INFO "Arr_value[%d] = %d\n", i, arr_valueETX[i]);
+        }
+        printk(KERN_INFO "Kernel Module Inserted Successfully...\n");
+    return 0;
+}
+
+/*
+*Module Exit function
+*/
+static void __exit hello_world_exit(void)
+{
+    printk(KERN_INFO "Kernel Module Removed Successfully...\n");
+}
+ 
+module_init(hello_world_init);
+module_exit(hello_world_exit);
+#+end_src
+** modprobe
+#+begin_src sh
+  ~ # modprobe hello_arg
+[   41.376723] hello_arg: loading out-of-tree module taints kernel.
+[   41.401862] ValueETX = 0  
+[   41.402270] cb_valueETX = 0  
+[   41.402575] NameETX = (null) 
+[   41.402873] Arr_value[0] = 0
+[   41.403169] Arr_value[1] = 0
+[   41.403403] Arr_value[2] = 0
+[   41.403626] Arr_value[3] = 0
+[   41.403877] Kernel Module Inserted Successfully...
+#+end_src
+It will generate four files in *sys/module/hello_arg/parameters/*, like that below.
+#+begin_src sh
+~ # ls /sys/module/hello_arg/parameters/
+arr_valueETX  cb_valueETX   nameETX       valueETX
+#+end_src
+When I see the contents of these files, it has the exactly same vals as printk output.
+#+begin_src sh
+~ # cat /sys/module/hello_arg/parameters/valueETX 
+0
+~ # cat /sys/module/hello_arg/parameters/cb_valueETX 
+0
+~ # cat /sys/module/hello_arg/parameters/arr_valueETX 
+0,0,0,0
+~ # cat /sys/module/hello_arg/parameters/nameETX 
+(null)
+~ # 
+#+end_src
+How to evoke the nodification function callback, seen above we have registed the cb_valueETX to bind the callback function list. Then if we change the value of the var, it will call the function like below.
+#+begin_src sh
+~ # echo 13 > /sys/module/hello_arg/parameters/cb_valueETX 
+[  913.506216] Call back function called...
+[  913.507312] New value of cb_valueETX = 13
+~ # 
+#+end_src
+
+** cmdline passing args
+#+begin_src sh
+  modprobe param=val parm=val,val2,..
+#+end_src
+#+begin_src sh
+~ # modprobe hello_arg cb_valueETX=13 valueETX=14 nameETX="zyy-victor" arr_valueETX=1,2,3,4
+[ 1887.340213] Call back function called...
+[ 1887.340600] New value of cb_valueETX = 13
+[ 1887.342150] ValueETX = 14  
+[ 1887.342406] cb_valueETX = 13  
+[ 1887.342630] NameETX = zyy-victor 
+[ 1887.342871] Arr_value[0] = 1
+[ 1887.343109] Arr_value[1] = 2
+[ 1887.343300] Arr_value[2] = 3
+[ 1887.343491] Arr_value[3] = 4
+[ 1887.343699] Kernel Module Inserted Successfully...
+~ # 
+#+end_src
+
