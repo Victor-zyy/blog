@@ -237,3 +237,15 @@ If we see the dev file in this directory, it is our driver major:minor number.
 crw-------    1 0        0         249,   0 May 22 12:21 /dev/etx_device
 ~ # 
 #+end_src
+
+* Suppliment
+#+begin_src c
+//include/linux/export.h
+#ifndef __ASSEMBLY__
+#ifdef MODULE
+extern struct module __this_module;
+#define THIS_MODULE (&__this_module)
+#else
+#define THIS_MODULE ((struct module *)0)
+#endif
+#+end_src
