@@ -40,3 +40,37 @@ $0 shell script itself, when N greater than zero, it is on behalf of each argume
 *** $@
 In brief, $@ expands to the arguments passed from the caller to a function or a script. Its meaning is context-dependent: Inside a function, it expands to the arguments passed to such function. If used in a script (outside a function), it expands to the arguments passed to such script.
 
+
+* Add environment
+The env environments are separated by * : *.
+** export
+This method is gonna add temporary env var, after you reboot, the change will disappear
+#+begin_src sh
+~ # export PATH="/usr/local/bin/:$PATH"
+#+end_src
+** .bashrc/.ashrc
+#+begin_src sh
+export PATH=$PATH:/home/$USER/.local/bin
+#+end_src
+** /etc/profile
+This method covers the procedure of the shell starting up. The details are kind of complex. But before the shell maybe bash/ash starts up, it will read the contents of the file of /etc/profile.
+#+begin_src sh
+# /etc/profile: system-wide .profile file for the Bourne shell (sh(1))
+# and Bourne compatible shells (bash(1), ksh(1), ash(1), ...).
+
+if [ "${PS1-}" ]; then
+  if [ "${BASH-}" ] && [ "$BASH" != "/bin/sh" ]; then
+    # The file bash.bashrc already sets the default PS1.
+    # PS1='\h:\w\$ '
+    if [ -f /etc/bash.bashrc ]; then
+      . /etc/bash.bashrc
+    fi
+  else
+    if [ "$(id -u)" -eq 0 ]; then
+      PS1='# '
+    else
+      PS1='$ '
+    fi
+  fi
+fi
+#+end_src
