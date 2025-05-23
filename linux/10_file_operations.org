@@ -1,0 +1,280 @@
+* File Operations
+Struct inode represents a file structure in linux kernel, 
+** file related structure
+file structure covers the inode struct and the inode covers the cdev structure.
+file/inode resides in */include/linux/fs.h*, and the cdev resides in */include/linux/cdev.h* file. And a cdev refers to a char device file in kernel.
+*** file struct
+#+begin_src c
+struct file {
+	union {
+		struct llist_node	fu_llist;
+		struct rcu_head 	fu_rcuhead;
+	} f_u;
+	struct path		f_path;
+	struct inode		*f_inode;	/* cached value */
+#+end_src
+*** inode struct
+#+begin_src c
+struct inode {
+    umode_t			i_mode;
+    unsigned short		i_opflags;
+    kuid_t			i_uid;
+    kgid_t			i_gid;
+    unsigned int		i_flags;
+....
+    union {
+            struct pipe_inode_info	*i_pipe;
+            struct cdev		*i_cdev;
+            char			*i_link;
+            unsigned		i_dir_seq;
+#+end_src
+*** cdev struct
+#+begin_src c
+struct cdev {
+	struct kobject kobj;
+	struct module *owner;
+	const struct file_operations *ops;
+	struct list_head list;
+	dev_t dev;
+	unsigned int count;
+} __randomize_layout;
+#+end_src
+In order to use the cdev structure, we have to fill the two variables like owner (aka THIS_MODULE), and file_operations which is important.
+*** file_operations
+#+begin_src c
+struct file_operations {
+	struct module *owner;
+	loff_t (*llseek) (struct file *, loff_t, int);
+	ssize_t (*read) (struct file *, char __user *, size_t, loff_t *);
+	ssize_t (*write) (struct file *, const char __user *, size_t, loff_t *);
+	ssize_t (*read_iter) (struct kiocb *, struct iov_iter *);
+	ssize_t (*write_iter) (struct kiocb *, struct iov_iter *);
+	int (*iopoll)(struct kiocb *kiocb, bool spin);
+	int (*iterate) (struct file *, struct dir_context *);
+	int (*iterate_shared) (struct file *, struct dir_context *);
+	__poll_t (*poll) (struct file *, struct poll_table_struct *);
+	long (*unlocked_ioctl) (struct file *, unsigned int, unsigned long);
+	long (*compat_ioctl) (struct file *, unsigned int, unsigned long);
+	int (*mmap) (struct file *, struct vm_area_struct *);
+	unsigned long mmap_supported_flags;
+	int (*open) (struct inode *, struct file *);
+	int (*flush) (struct file *, fl_owner_t id);
+	int (*release) (struct inode *, struct file *);
+	int (*fsync) (struct file *, loff_t, loff_t, int datasync);
+	int (*fasync) (int, struct file *, int);
+	int (*lock) (struct file *, int, struct file_lock *);
+	ssize_t (*sendpage) (struct file *, struct page *, int, size_t, loff_t *, int);
+	unsigned long (*get_unmapped_area)(struct file *, unsigned long, unsigned long, unsigned long, unsigned long);
+	int (*check_flags)(int);
+	int (*flock) (struct file *, int, struct file_lock *);
+	ssize_t (*splice_write)(struct pipe_inode_info *, struct file *, loff_t *, size_t, unsigned int);
+	ssize_t (*splice_read)(struct file *, loff_t *, struct pipe_inode_info *, size_t, unsigned int);
+	int (*setlease)(struct file *, long, struct file_lock **, void **);
+	long (*fallocate)(struct file *file, int mode, loff_t offset,
+			  loff_t len);
+	void (*show_fdinfo)(struct seq_file *m, struct file *f);
+#ifndef CONFIG_MMU
+	unsigned (*mmap_capabilities)(struct file *);
+#endif
+	ssize_t (*copy_file_range)(struct file *, loff_t, struct file *,
+			loff_t, size_t, unsigned int);
+	loff_t (*remap_file_range)(struct file *file_in, loff_t pos_in,
+				   struct file *file_out, loff_t pos_out,
+				   loff_t len, unsigned int remap_flags);
+	int (*fadvise)(struct file *, loff_t, loff_t, int);
+} __randomize_layout;
+#+end_src
+
+** cdev allocation
+runtime allocation
+#+begin_src c
+struct cdev *my_cdev = cdev_alloc( );
+my_cdev->ops = &my_fops;
+#+end_src
+own allocation
+#+begin_src c
+/**
+ * cdev_init() - initialize a cdev structure
+ * @cdev: the structure to initialize
+ * @fops: the file_operations for this device
+ *
+ * Initializes @cdev, remembering @fops, making it ready to add to the
+ * system with cdev_add().
+ */
+void cdev_init(struct cdev *cdev, const struct file_operations *fops)
+#+end_src
+** cdev_add
+After allocating a cdev struct and initializing, we have to use cdev_add defined /fs/char_dev.c to tell the kernel.
+#+begin_src c
+/**
+ * cdev_add() - add a char device to the system
+ * @p: the cdev structure for the device
+ * @dev: the first device number for which this device is responsible
+ * @count: the number of consecutive minor numbers corresponding to this
+ *         device
+ *
+ * cdev_add() adds the device represented by @p to the system, making it
+ * live immediately.  A negative error code is returned on failure.
+ */
+int cdev_add(struct cdev *p, dev_t dev, unsigned count)
+
+#+end_src
+
+** cdev_del
+#+begin_src c
+/**
+ * cdev_del() - remove a cdev from the system
+ * @p: the cdev structure to be removed
+ *
+ * cdev_del() removes @p from the system, possibly freeing the structure
+ * itself.
+ *
+ * NOTE: This guarantees that cdev device will no longer be able to be
+ * opened, however any cdevs already open will remain and their fops will
+ * still be callable even after cdev_del returns.
+ */
+void cdev_del(struct cdev *p)
+#+end_src
+
+* Template
+** driver-simple ops
+#+begin_src c
+dev_t dev = 0;
+static struct class *dev_class;
+static struct cdev etx_cdev;
+
+/*
+**Function Prototypes
+*/
+static int      __init etx_driver_init(void);
+static void     __exit etx_driver_exit(void);
+static int      etx_open(struct inode *inode, struct file *file);
+static int      etx_release(struct inode *inode, struct file *file);
+static ssize_t  etx_read(struct file *filp, char __user *buf, size_t len,loff_t * off);
+static ssize_t  etx_write(struct file *filp, const char *buf, size_t len, loff_t * off);
+
+static struct file_operations fops =
+{
+    .owner      = THIS_MODULE,
+    .read       = etx_read,
+    .write      = etx_write,
+    .open       = etx_open,
+    .release    = etx_release,
+};
+
+/*
+**This function will be called when we open the Device file
+*/
+static int etx_open(struct inode *inode, struct file *file)
+{
+        pr_info("Driver Open Function Called...!!!\n");
+        return 0;
+}
+
+/*
+**This function will be called when we close the Device file
+*/
+static int etx_release(struct inode *inode, struct file *file)
+{
+        pr_info("Driver Release Function Called...!!!\n");
+        return 0;
+}
+
+/*
+**This function will be called when we read the Device file
+*/
+static ssize_t etx_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
+{
+        pr_info("Driver Read Function Called...!!!\n");
+        return 0;
+}
+
+/*
+**This function will be called when we write the Device file
+*/
+static ssize_t etx_write(struct file *filp, const char __user *buf, size_t len, loff_t *off)
+{
+        pr_info("Driver Write Function Called...!!!\n");
+        return len;
+}
+
+/*
+**Module Init function
+*/
+static int __init etx_driver_init(void)
+{
+        /*Allocating Major number*/
+        if((alloc_chrdev_region(&dev, 0, 1, "etx_Dev")) <0){
+                pr_err("Cannot allocate major number\n");
+                return -1;
+        }
+        pr_info("Major = %d Minor = %d \n",MAJOR(dev), MINOR(dev));
+
+        /*Creating cdev structure*/
+        cdev_init(&etx_cdev,&fops);
+
+        /*Adding character device to the system*/
+        if((cdev_add(&etx_cdev,dev,1)) < 0){
+            pr_err("Cannot add the device to the system\n");
+            goto r_class;
+        }
+
+        /*Creating struct class*/
+        if(IS_ERR(dev_class = class_create(THIS_MODULE,"etx_class"))){
+            pr_err("Cannot create the struct class\n");
+            goto r_class;
+        }
+
+        /*Creating device*/
+        if(IS_ERR(device_create(dev_class,NULL,dev,NULL,"etx_device"))){
+            pr_err("Cannot create the Device 1\n");
+            goto r_device;
+        }
+        pr_info("Device Driver Insert...Done!!!\n");
+      return 0;
+
+r_device:
+        class_destroy(dev_class);
+r_class:
+        unregister_chrdev_region(dev,1);
+        return -1;
+}
+
+/*
+**Module exit function
+*/
+static void __exit etx_driver_exit(void)
+{
+        device_destroy(dev_class,dev);
+        class_destroy(dev_class);
+        cdev_del(&etx_cdev);
+        unregister_chrdev_region(dev, 1);
+        pr_info("Device Driver Remove...Done!!!\n");
+}
+
+module_init(etx_driver_init);
+module_exit(etx_driver_exit);
+#+end_src
+** echo to the device file
+#+begin_src sh
+~ # modprobe hello-ops
+[   33.400569] hello_ops: loading out-of-tree module taints kernel.
+[   33.424201] Major = 249 Minor = 0 
+[   33.425617] Device Driver Insert...Done!!!
+~ # ls /dev/etx_device 
+/dev/etx_device
+~ # ls -l /dev/etx_device 
+crw-------    1 0        0         249,   0 May 23 07:37 /dev/etx_device
+~ # echo 1 > /dev/etx_device 
+[   61.455733] Driver Open Function Called...!!!
+[   61.457597] Driver Write Function Called...!!!
+[   61.458367] Driver Release Function Called...!!!
+#+end_src
+** read from the device file
+#+begin_src sh
+~ # cat < /dev/etx_device 
+[  332.481668] Driver Open Function Called...!!!
+[  332.537344] Driver Read Function Called...!!!
+[  332.541489] Driver Release Function Called...!!!
+~ # 
+#+end_src

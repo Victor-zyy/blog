@@ -1,0 +1,389 @@
+* Real ChrDevice Driver
+** kmalloc
+defined */include/linux/slab.h*
+#+begin_src c
+/**
+ * kmalloc - allocate memory
+ * @size: how many bytes of memory are required.
+ * @flags: the type of memory to allocate.
+ *
+ * kmalloc is the normal method of allocating memory
+ * for objects smaller than page size in the kernel.
+ *
+ * The allocated object address is aligned to at least ARCH_KMALLOC_MINALIGN
+ * bytes. For @size of power of two bytes, the alignment is also guaranteed
+ * to be at least to the size.
+ *
+ * The @flags argument may be one of the GFP flags defined at
+ * include/linux/gfp.h and described at
+ * :ref:`Documentation/core-api/mm-api.rst <mm-api-gfp-flags>`
+ *
+ *
+ * Below is a brief outline of the most useful GFP flags
+ *
+ * %GFP_KERNEL
+ *	Allocate normal kernel ram. May sleep.
+ *
+ * %GFP_NOWAIT
+ *	Allocation will not sleep.
+ *
+ * %GFP_ATOMIC
+ *	Allocation will not sleep.  May use emergency pools.
+ *
+ * %GFP_HIGHUSER
+ *	Allocate memory from high memory on behalf of user.
+ *
+ * Also it is possible to set different flags by OR'ing
+ * in one or more of the following additional @flags:
+ *
+ * %__GFP_HIGH
+ *	This allocation has high priority and may use emergency pools.
+ *
+ * %__GFP_NOFAIL
+ *	Indicate that this allocation is in no way allowed to fail
+ *	(think twice before using).
+ *
+ * %__GFP_NORETRY
+ *	If memory is not immediately available,
+ *	then give up at once.
+ *
+ * %__GFP_NOWARN
+ *	If allocation fails, don't issue any warnings.
+ *
+ * %__GFP_RETRY_MAYFAIL
+ *	Try really hard to succeed the allocation but fail
+ *	eventually.
+ */
+static __always_inline void *kmalloc(size_t size, gfp_t flags)
+#+end_src
+ The recommended usage of the @flags is described at
+ :ref:`Documentation/core-api/memory-allocation.rst <memory_allocation>`
+ There are many flags here to show up that the memory allocation stategy and so forth.
+** kfree
+The free function is defined in *mm/slab.c* file.
+#+begin_src c
+/**
+ * kfree - free previously allocated memory
+ * @objp: pointer returned by kmalloc.
+ *
+ * If @objp is NULL, no operation is performed.
+ *
+ * Don't free memory not originally allocated by kmalloc()
+ * or you will run into trouble.
+ */
+void kfree(const void *objp)
+#+end_src
+** copy_from_user
+This function is used to copy contents from user space to kernel space, if we did use this function, we have to use kmalloc to request a set of memory in use in kernel mode. These two functions are defined in */include/linux/uaccess.h*.
+#+begin_src c
+static __always_inline unsigned long __must_check
+copy_from_user(void *to, const void __user *from, unsigned long n)
+{
+	if (likely(check_copy_size(to, n, false)))
+		n = _copy_from_user(to, from, n);
+	return n;
+}
+#+end_src
+** copy_to_user
+#+begin_src c
+static __always_inline unsigned long __must_check
+copy_to_user(void __user *to, const void *from, unsigned long n)
+{
+	if (likely(check_copy_size(from, n, true)))
+		n = _copy_to_user(to, from, n);
+	return n;
+}
+#+end_src
+
+* Template
+#+begin_src c
+#define mem_size        1024           //Memory Size
+ 
+dev_t dev = 0;
+static struct class *dev_class;
+static struct cdev etx_cdev;
+uint8_t *kernel_buffer;
+
+/*
+**Function Prototypes
+*/
+static int      __init etx_driver_init(void);
+static void     __exit etx_driver_exit(void);
+static int      etx_open(struct inode *inode, struct file *file);
+static int      etx_release(struct inode *inode, struct file *file);
+static ssize_t  etx_read(struct file *filp, char __user *buf, size_t len,loff_t * off);
+static ssize_t  etx_write(struct file *filp, const char *buf, size_t len, loff_t * off);
+
+
+/*
+**File Operations structure
+*/
+static struct file_operations fops =
+{
+        .owner          = THIS_MODULE,
+        .read           = etx_read,
+        .write          = etx_write,
+        .open           = etx_open,
+        .release        = etx_release,
+};
+ 
+/*
+**This function will be called when we open the Device file
+*/
+static int etx_open(struct inode *inode, struct file *file)
+{
+        pr_info("Device File Opened...!!!\n");
+        return 0;
+}
+
+/*
+**This function will be called when we close the Device file
+*/
+static int etx_release(struct inode *inode, struct file *file)
+{
+        pr_info("Device File Closed...!!!\n");
+        return 0;
+}
+
+/*
+**This function will be called when we read the Device file
+*/
+static ssize_t etx_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
+{
+        //Copy the data from the kernel space to the user-space
+        if( copy_to_user(buf, kernel_buffer, mem_size) )
+        {
+                pr_err("Data Read : Err!\n");
+        }
+        pr_info("Data Read : Done!\n");
+        return mem_size;
+}
+
+/*
+**This function will be called when we write the Device file
+*/
+static ssize_t etx_write(struct file *filp, const char __user *buf, size_t len, loff_t *off)
+{
+        //Copy the data to kernel space from the user-space
+        if(copy_from_user(kernel_buffer, buf, len) )
+        {
+                pr_err("Data Write : Err!\n");
+        }
+        pr_info("Data Write : Done!\n");
+        return len;
+}
+
+/*
+**Module Init function
+*/
+static int __init etx_driver_init(void)
+{
+        /*Allocating Major number*/
+        if((alloc_chrdev_region(&dev, 0, 1, "etx_Dev")) <0){
+                pr_info("Cannot allocate major number\n");
+                return -1;
+        }
+        pr_info("Major = %d Minor = %d \n",MAJOR(dev), MINOR(dev));
+ 
+        /*Creating cdev structure*/
+        cdev_init(&etx_cdev,&fops);
+ 
+        /*Adding character device to the system*/
+        if((cdev_add(&etx_cdev,dev,1)) < 0){
+            pr_info("Cannot add the device to the system\n");
+            goto r_class;
+        }
+ 
+        /*Creating struct class*/
+        if(IS_ERR(dev_class = class_create(THIS_MODULE,"etx_class"))){
+            pr_info("Cannot create the struct class\n");
+            goto r_class;
+        }
+ 
+        /*Creating device*/
+        if(IS_ERR(device_create(dev_class,NULL,dev,NULL,"etx_device"))){
+            pr_info("Cannot create the Device 1\n");
+            goto r_device;
+        }
+        
+        /*Creating Physical memory*/
+        if((kernel_buffer = kmalloc(mem_size , GFP_KERNEL)) == 0){
+            pr_info("Cannot allocate memory in kernel\n");
+            goto r_device;
+        }
+        
+        strcpy(kernel_buffer, "Hello_World");
+        
+        pr_info("Device Driver Insert...Done!!!\n");
+        return 0;
+ 
+r_device:
+        class_destroy(dev_class);
+r_class:
+        unregister_chrdev_region(dev,1);
+        return -1;
+}
+
+/*
+**Module exit function
+*/
+static void __exit etx_driver_exit(void)
+{
+        kfree(kernel_buffer);
+        device_destroy(dev_class,dev);
+        class_destroy(dev_class);
+        cdev_del(&etx_cdev);
+        unregister_chrdev_region(dev, 1);
+        pr_info("Device Driver Remove...Done!!!\n");
+}
+ 
+module_init(etx_driver_init);
+module_exit(etx_driver_exit);
+#+end_src
+
+** application
+#+begin_src c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+
+int8_t write_buf[1024];
+int8_t read_buf[1024];
+
+int main()
+{
+        int fd;
+        char option;
+        printf("*********************************\n");
+
+        fd = open("/dev/etx_device", O_RDWR);
+        if(fd < 0) {
+                printf("Cannot open device file...\n");
+                return 0;
+        }
+
+        while(1) {
+                printf("****Please Enter the Option******\n");
+                printf("        1. Write               \n");
+                printf("        2. Read                 \n");
+                printf("        3. Exit                 \n");
+                printf("*********************************\n");
+                scanf(" %c", &option);
+                printf("Your Option = %c\n", option);
+                
+                switch(option) {
+                        case '1':
+                                printf("Enter the string to write into driver :");
+                                scanf("  %[^\t\n]s", write_buf);
+                                printf("Data Writing ...");
+                                write(fd, write_buf, strlen(write_buf)+1);
+                                printf("Done!\n");
+                                break;
+                        case '2':
+                                printf("Data Reading ...");
+                                read(fd, read_buf, 1024);
+                                printf("Done!\n\n");
+                                printf("Data = %s\n\n", read_buf);
+                                break;
+                        case '3':
+                                close(fd);
+                                exit(1);
+                                break;
+                        default:
+                                printf("Enter Valid option = %c\n",option);
+                                break;
+                }
+        }
+        close(fd);
+}
+#+end_src
+The application just open the device file and write or read to the file by input options passing by the user.
+** result
+#+begin_src sh
+~ # ls -lh test_app 
+-rwxrwxr-x    1 1000     1000      551.5K May 23 08:11 test_app
+~ # modprobe hello-real
+[ 2882.024827] Major = 249 Minor = 0 
+[ 2882.026195] Device Driver Insert...Done!!!
+~ # ./test_app 
+[ 2886.814236] Device File Opened...!!!
+        1. Write               
+        2. Read                 
+        3. Exit                 
+2
+Your Option = 2
+[ 2887.768777] Data Read : Done!
+Data Reading ...Done!
+
+Data = Hello_World
+
+        1. Write               
+        2. Read                 
+        3. Exit                 
+Enter the string to write into driver :world-hello this is new!
+[ 3098.306683] Data Write : Done!
+Data Writing ...Done!
+****Please Enter the Option******
+        1. Write               
+        2. Read                 
+        3. Exit                 
+2
+Your Option = 2
+[ 3099.258429] Data Read : Done!
+Data Reading ...Done!
+
+Data = world-hello this is new!
+
+        1. Write               
+        2. Read                 
+        3. Exit                 
+#+end_src
+** bug report
+*** cat infinite loop
+#+begin_src sh
+[ 3177.184946] Device File Opened...!!!
+[ 3177.185439] Data Read : Done!
+[ 3177.192016] Data Read : Done!
+[ 3177.925677] Data Read : Done!
+.....
+[ 3177.932470] Data Read : Done!
+[ 3179.284342] Device File Closed...!!!
+#+end_src
+Use the offset to handle the infinite loop, if we already read the whole length of the memsize in kernel, then just return, if not add the offset to the kernel_buffer pointer to indicate the recently bytes that hasn't used already.
+#+begin_src c
+/*
+**This function will be called when we read the Device file
+*/
+static ssize_t etx_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
+{
+    ssize_t bytes_to_read = min(len, (size_t)(mem_size - *off));
+
+    if (bytes_to_read <= 0) {
+        pr_info("Data Read: End of file\n");
+        return 0; // End of file
+    }
+
+    if (copy_to_user(buf, kernel_buffer + *off, bytes_to_read)) {
+        pr_err("Data Read: Err!\n");
+        return -EFAULT; 
+    }
+
+    *off += bytes_to_read;
+    pr_info("Data Read: Done!\n");
+    return bytes_to_read;
+}
+#+end_src
+
+#+begin_src c
+~ # cat /dev/etx_device 
+[   20.244581] Device File Opened...!!!
+[   20.247381] Data Read: Done!
+Hello_World�xxxxxx
+[   20.256906] Data Read: End of file
+[   20.257719] Device File Closed...!!!
+#+end_src
+But there are still  some bugs in this kernel driver I need to fix it in the future.

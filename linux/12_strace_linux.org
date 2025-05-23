@@ -1,0 +1,120 @@
+* Strace Command
+** strace source code
+#+begin_src sh
+  git clone https://github.com/riscvarchive/riscv-strace.git
+#+end_src
+** modify the configure.sub
+#+begin_src sh
+diff --git a/config.sub b/config.sub
+index c3e202d..c8cba11 100755
+--- a/config.sub
++++ b/config.sub
+@@ -301,6 +301,7 @@ case $basic_machine in
+        | pdp10 | pdp11 | pj | pjl \
+        | powerpc | powerpc64 | powerpc64le | powerpcle \
+        | pyramid \
++        | riscv | riscv32 | riscv64 \
+        | rl78 | rx \
+        | score \
+        | sh | sh[1234] | sh[24]a | sh[24]aeb | sh[23]e | sh[34]eb | sheb | shbe | shle | sh[1234]le | sh3ele \
+#+end_src
+** compile for riscv statically
+#+begin_src sh
+zyy@ubuntu:~/repo/riscv-strace$ ./configure --build x86_64-pc-linux-gnu --host riscv64 CC=riscv64-linux-gnu-gcc LDFLAGS="-static"
+zyy@ubuntu:make -j8
+#+end_src
+** strace compiled
+#+begin_src sh
+zyy@ubuntu:~/repo/riscv-strace$ file strace
+strace: ELF 64-bit LSB executable, UCB RISC-V, RVC, double-float ABI, version 1 (SYSV), statically linked, BuildID[sha1]=e1c8ba6c627030ba74bac963a30bd0935c5d8d4b, for GNU/Linux 4.15.0, with debug_info, not stripped
+#+end_src
+
+** copy user to rootfs
+#+begin_src c
+zyy@ubuntu:~/repo/riscv-linux-from-scratch/flash/jffs2/usr/local/bin$ pwd
+/home/zyy/repo/riscv-linux-from-scratch/flash/jffs2/usr/local/bin
+
+~ # /usr/local/bin/strace --help
+/usr/local/bin/strace: invalid option -- '-'
+usage: strace [-CdffhiqrtttTvVxxy] [-I n] [-e expr]...
+            [-a column] [-o file] [-s strsize] [-P path]...
+            -p pid... / [-D] [-E var=val]... [-u username] PROG [ARGS]
+    or: strace -c[df] [-I n] [-e expr]... [-O overhead] [-S sortby]
+            -p pid... / [-D] [-E var=val]... [-u username] PROG [ARGS]
+-c -- count time, calls, and errors for each syscall and report summary
+#+end_src
+
+** result
+This version of riscv-strace can't be used when evoke. So I use the official version of strace
+** strace source code
+#+begin_src sh
+git clone https://github.com/strace/strace.git
+#+end_src
+** bootstrap
+#+begin_src sh
+ ./bootstrap to generate files in src directory
+#+end_src
+** configure
+#+begin_src sh
+zyy@ubuntu:~/repo/riscv-strace$ ./configure --build x86_64-pc-linux-gnu --host riscv64 CC=riscv64-linux-gnu-gcc LDFLAGS="-static"
+zyy@ubuntu:make -j8
+#+end_src
+** install
+#+begin_src sh
+zyy@ubuntu:~/repo/strace/src$ file strace
+strace: ELF 64-bit LSB executable, UCB RISC-V, RVC, double-float ABI, version 1 (SYSV), statically linked, BuildID[sha1]=b4e549ae55fff07af0331d6ec4205cd863ea2ee3, for GNU/Linux 4.15.0, with debug_info, not stripped
+zyy@ubuntu:~/repo/strace/src$ 
+
+#+end_src
+#+begin_src sh
+  ~ # /usr/local/bin/strace echo 1
+execve("/bin/echo", ["echo", "1"], 0x3fc67ffd98 /* 7 vars */) = 0
+brk(NULL)                               = 0x1ca000
+brk(0x1cabb8)                           = 0x1cabb8
+set_tid_address(0x1ca0d0)               = 43
+set_robust_list(0x1ca0e0, 24)           = 0
+uname({sysname="Linux", nodename="(none)", ...}) = 0
+prlimit64(0, RLIMIT_STACK, NULL, {rlim_cur=8192*1024, rlim_max=RLIM64_INFINITY}) = 0
+readlinkat(AT_FDCWD, "/proc/self/exe", "/bin/busybox", 4096) = 12
+getrandom(0x1c8200, 8, GRND_NONBLOCK)   = -1 EAGAIN (Resource temporarily unavailable)
+clock_gettime(CLOCK_MONOTONIC, {tv_sec=28, tv_nsec=464804600}) = 0
+clock_gettime(CLOCK_MONOTONIC, {tv_sec=28, tv_nsec=467507700}) = 0
+brk(0x1ebbb8)                           = 0x1ebbb8
+brk(0x1ec000)                           = 0x1ec000
+mprotect(0x1b9000, 28672, PROT_READ)    = 0
+getuid()                                = 0
+write(1, "1\n", 21
+)                      = 2
+exit_group(0)                           = ?
++++ exited with 0 +++
+~ # 
+#+end_src
+Looks pretty good!
+
+** strace linux driver
+If we wanna know why writing data to a device file will call specific driver, we can use strace to find whether the kernel calls the function except for write systemcall, what I express is that, write in linux-kernel will dives into special function depends on the major:minor number of a device file, this differs from general file on the disk.
+#+begin_src sh
+~ # /usr/local/bin/strace echo 1 > /dev/etx_device 
+[   65.892566] Device File Opened...!!!
+execve("/bin/echo", ["echo", "1"], 0x3fd020ad98 /* 7 vars */) = 0
+brk(NULL)                               = 0x1ca000
+brk(0x1cabb8)                           = 0x1cabb8
+set_tid_address(0x1ca0d0)               = 40
+set_robust_list(0x1ca0e0, 24)           = 0
+uname({sysname="Linux", nodename="(none)", ...}) = 0
+prlimit64(0, RLIMIT_STACK, NULL, {rlim_cur=8192*1024, rlim_max=RLIM64_INFINITY}) = 0
+readlinkat(AT_FDCWD, "/proc/self/exe", "/bin/busybox", 4096) = 12
+getrandom(0x1c8200, 8, GRND_NONBLOCK)   = -1 EAGAIN (Resource temporarily unavailable)
+clock_gettime(CLOCK_MONOTONIC, {tv_sec=66, tv_nsec=110462900}) = 0
+clock_gettime(CLOCK_MONOTONIC, {tv_sec=66, tv_nsec=115428000}) = 0
+brk(0x1ebbb8)                           = 0x1ebbb8
+brk(0x1ec000)                           = 0x1ec000
+mprotect(0x1b9000, 28672, PROT_READ)    = 0
+getuid()                                = 0
+write(1, "1\n", 2[   66.192524] Data Write : Done!
+)                      = 2
+exit_group(0)                           = ?
++++ exited with 0 +++
+[   66.210144] Device File Closed...!!!
+#+end_src
+From the info printed by the strace, we can see that only write system call is called on writing operation.
