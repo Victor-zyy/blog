@@ -61,4 +61,167 @@ filters:
 
 #+end_src
 
+** pci/pcie
+*** PCIE Root Complex
+#+begin_src sh
+zyy@ubuntu:~$ lspci -t -vvv | grep -i "root"
+-[0000:00]-+-00.0  Advanced Micro Devices, Inc. [AMD] Renoir/Cezanne Root Complex
+zyy@ubuntu:~$ 
+#+end_src
+*** PCIE Device
+Type 0: PCIE endpoint, real device, Type 1: for PCIE switch, which is used for connect with other PCIE devices
+Actually, in PCIE world, it's end-to-end connection not share bus, differing from PCI bus. For the most part, if we wanna use PCI device, we have to make sure that the PCIE to PCI bridge exists.
+*** BDF
+Format BB:DD.F
+Bus Number: 8bits
+Device Number: 5bits
+Function Number: 3bits
+#+begin_src sh
+-[0000:00]-+-00.0  Advanced Micro Devices, Inc. [AMD] Renoir/Cezanne Root Complex
+           +-00.2  Advanced Micro Devices, Inc. [AMD] Renoir/Cezanne IOMMU
+           +-01.0  Advanced Micro Devices, Inc. [AMD] Renoir PCIe Dummy Host Bridge
+zyy@ubuntu:~$ lspci -s 00:01.2 -v
+00:01.2 PCI bridge: Advanced Micro Devices, Inc. [AMD] Renoir/Cezanne PCIe GPP Bridge (prog-if 00 [Normal decode])
+	Flags: bus master, fast devsel, latency 0, IRQ 28, IOMMU group 1
+	Bus: primary=00, secondary=01, subordinate=01, sec-latency=0
+	I/O behind bridge: 00002000-00002fff [size=4K]
+	Memory behind bridge: d0500000-d05fffff [size=1M]
+	Prefetchable memory behind bridge: [disabled]
+	Capabilities: <access denied>
+	Kernel driver in use: pcieport
+#+end_src
+With the BDF number, we can use it to search the pci device.
+*** Endpoint
+Type 0 device may have many endpoints.
+#+begin_src sh
++-08.1-[03]--+-00.0  Advanced Micro Devices, Inc. [AMD/ATI] Renoir
+           |            +-00.1  Advanced Micro Devices, Inc. [AMD/ATI] Renoir Radeon High Definition Audio Controller
+           |            +-00.2  Advanced Micro Devices, Inc. [AMD] Family 17h (Models 10h-1fh) Platform Security Processor
+           |            +-00.3  Advanced Micro Devices, Inc. [AMD] Renoir/Cezanne USB 3.1
+           |            +-00.4  Advanced Micro Devices, Inc. [AMD] Renoir/Cezanne USB 3.1
+           |            +-00.5  Advanced Micro Devices, Inc. [AMD] Raven/Raven2/FireFlight/Renoir Audio Processor
+           |            \-00.6  Advanced Micro Devices, Inc. [AMD] Family 17h (Models 10h-1fh) HD Audio Controller
+#+end_src
+*** RCIE
+Root Complex Integrated Express Endpoint, devices that connetted to the root complex belong to this type.
+*** root port
+#+begin_src sh
++-01.2-[01]----00.0  Realtek Semiconductor Co., Ltd. RTL8822CE 802.11ac PCIe Wireless Network Adapter
+#+end_src
+Bridge used for devices that connectted to PCIE slot. [01] is a bus numberassigned by the system.
+*** switch
+** pcie ecam
+*** pcie configuration space
+in pcie device system, every device has 4KB configuration space. And in order to keep compability of PCI device , PCIE keeps the 64Bytes of the starting space the same as the PCI.
+*** x86 arch
+In x86 arch system, the bios will use the acpi to find all pci/pcie devices and then distribute space to every devices in memory mapping, then give the information to OS by *ecam*.
+To get the ecam base address, use the acpidump and iasl tool in linux, we can see the BaseAddress in the tabel delow.
+#+begin_src sh
+zyy@ubuntu:~$ sudo acpidump -n MCFG -b
+zyy@ubuntu:~$ iasl ./mcfg.dat; 
+[000h 0000   4]                    Signature : "MCFG"    [Memory Mapped Configuration table]
+[004h 0004   4]                 Table Length : 0000003C
+[008h 0008   1]                     Revision : 01
+[009h 0009   1]                     Checksum : 90
+[00Ah 0010   6]                       Oem ID : "HUAWEI"
+[010h 0016   8]                 Oem Table ID : "EDK2    "
+[018h 0024   4]                 Oem Revision : 00000002
+[01Ch 0028   4]              Asl Compiler ID : "    "
+[020h 0032   4]        Asl Compiler Revision : 01000013
+
+[024h 0036   8]                     Reserved : 0000000000000000
+
+[02Ch 0044   8]                 Base Address : 00000000F8000000
+[034h 0052   2]         Segment Group Number : 0000
+[036h 0054   1]             Start Bus Number : 00
+[037h 0055   1]               End Bus Number : 3F
+[038h 0056   4]                     Reserved : 00000000
+
+Raw Table Data: Length 60 (0x3C)
+
+    0000: 4D 43 46 47 3C 00 00 00 01 90 48 55 41 57 45 49  // MCFG<.....HUAWEI
+    0010: 45 44 4B 32 20 20 20 20 02 00 00 00 20 20 20 20  // EDK2    ....    
+    0020: 13 00 00 01 00 00 00 00 00 00 00 00 00 00 00 F8  // ................
+    0030: 00 00 00 00 00 00 00 3F 00 00 00 00              // .......?....
+
+#+end_src
+After having known the ECAM base address, PCIE use BDF to construct the offset of each device configuration address. For example:
+If we got a pcie device whose BDF number is 00:01.2 and ECAM base address is 0xf8000000, then the configuration address of this device is 0xf8000000 + (0 << 20) + (1 << 15) + (2 << 12); However in linux, we can use setpci to get the contents of the configuration space.
+#+begin_src sh
+zyy@ubuntu:~$ setpci -s 00:01.2 00.w
+1022
+zyy@ubuntu:~$ setpci -s 00:01.2 02.w
+1634
+zyy@ubuntu:~$ 
+#+end_src
+Remember that we have to align the address to access the memory, if we haven't done that, the memory controller won't issue the PCIE access.
+However, for PCI device the shift number when use BDF is kinda different, that is because the PCI configuration space is only 64bytes in total, on the contray in PCIE is 4Kbytes.
+Next configuration below shows the difference between PCI and PCIE.
+#+begin_src c
+	// for pci compatibility
+	uint32_t v = // config-space
+		(bus << 16) | (dev << 11) | (func << 8) | (offset);
+	// for pcie
+	uint32_t v = // config-space
+		(bus << 20) | (dev << 15) | (func << 12) | (offset);
+	// 0xfff 4096Bytes
+#+end_src
+In early i386, access mode is CAM, which has two io ports for CONFIG_ADDRESS and ADDRESS_DATA.But in recently arch of x86, they now use ECAM access mode to unitilize the PCIE device system.
+#+begin_src c
+// PCI "configuration mechanism one"
+static uint32_t pci_conf1_addr_ioport = 0x0cf8;
+static uint32_t pci_conf1_data_ioport = 0x0cfc;
+#+end_src
+*** riscv arch
+Riscv64-qemu adopts ECAM mechanism to support PCIE configuration and Access, like below, It has PCIE_PIO and PCIE_MEM which means we have to map n'bytes length of memory to this space in order to use after initializing.
+#+begin_src c
+    [VIRT_PCIE_PIO] =    {  0x3000000,       0x10000 },
+    [VIRT_PCIE_ECAM] =   { 0x30000000,    0x10000000 },
+    [VIRT_PCIE_MMIO] =   { 0x40000000,    0x40000000 },
+#+end_src
+** pcie scan
+*** scan from root_bus
+*** iterate the dev number
+*** in each device number iterate every function number
+#+begin_src c
+static int
+pci_scan_bus(struct pci_bus *bus)
+{
+	int totaldev = 0;
+	struct pci_func df;
+	memset(&df, 0, sizeof(df));
+	df.bus = bus;
+
+	// 8bit for bus (256) bus
+	// 5bit for dev (32) 3 bit for func (8)
+	for (df.dev = 0; df.dev < 32; df.dev++) {
+		uint32_t bhlc = pci_conf_read(&df, PCI_BHLC_REG);
+		if (PCI_HDRTYPE_TYPE(bhlc) > 1)	    // Unsupported or no device
+			continue;
+
+		totaldev++;
+
+		struct pci_func f = df;
+		for (f.func = 0; f.func < (PCI_HDRTYPE_MULTIFN(bhlc) ? 8 : 1);
+		     f.func++) {
+			struct pci_func af = f;
+
+			af.dev_id = pci_conf_read(&f, PCI_ID_REG);
+			if (PCI_VENDOR(af.dev_id) == 0xffff)
+				continue;
+
+			uint32_t intr = pci_conf_read(&af, PCI_INTERRUPT_REG);
+			af.irq_line = PCI_INTERRUPT_LINE(intr);
+
+			af.dev_class = pci_conf_read(&af, PCI_CLASS_REG);
+			if (pci_show_devs)
+				pci_print_func(&af);
+			pci_attach(&af);
+		}
+	}
+
+	return totaldev;
+}
+#+end_src
 * LWIP (low level tcp/ip stack)
+
