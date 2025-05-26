@@ -1,0 +1,320 @@
+* waitqueue
+Why we need waitqueue, and at what conditions do we need this technique?
+
+Linux Waitqueue is a mechanism provided in the kernel to implement the wait. As the name itself suggests, waitqueue is the list of processes waiting for an event.
+
+In other words, A wait queue is used to wait for someone to wake you up when a certain condition is true. They must be used carefully to ensure there is no race condition.
+
+** steps of waitqueue
+1. initialize the waitqueue
+2. queuing
+3. wake up
+
+** init waitqueue
+*** statically
+#+begin_src c
+DECLARE_WAIT_QUEUE_HEAD(wq);
+#+end_src
+*** dynamically
+#+begin_src c
+wait_queue_head_t wq;
+init_waitqueue_head (&wq);
+#+end_src
+** queuing method
+those functions are all defined and declared in include/linux/wait.h
+*** wait_event 
+#+begin_src c
+/**
+ * wait_event - sleep until a condition gets true
+ * @wq_head: the waitqueue to wait on
+ * @condition: a C expression for the event to wait for
+ *
+ * The process is put to sleep (TASK_UNINTERRUPTIBLE) until the
+ * @condition evaluates to true. The @condition is checked each time
+ * the waitqueue @wq_head is woken up.
+ *
+ * wake_up() has to be called after changing any variable that could
+ * change the result of the wait condition.
+ */
+#define wait_event(wq_head, condition)
+#+end_src
+*** wati_event_timeout
+#+begin_src c
+/**
+ * wait_event_timeout - sleep until a condition gets true or a timeout elapses
+ * @wq_head: the waitqueue to wait on
+ * @condition: a C expression for the event to wait for
+ * @timeout: timeout, in jiffies
+ *
+ * The process is put to sleep (TASK_UNINTERRUPTIBLE) until the
+ * @condition evaluates to true. The @condition is checked each time
+ * the waitqueue @wq_head is woken up.
+ *
+ * wake_up() has to be called after changing any variable that could
+ * change the result of the wait condition.
+ *
+ * Returns:
+ * 0 if the @condition evaluated to %false after the @timeout elapsed,
+ * 1 if the @condition evaluated to %true after the @timeout elapsed,
+ * or the remaining jiffies (at least 1) if the @condition evaluated
+ * to %true before the @timeout elapsed.
+ */
+#define wait_event_timeout(wq_head, condition, timeout)
+#+end_src
+
+*** wait_event_cmd
+#+begin_src c
+/**
+ * wait_event_cmd - sleep until a condition gets true
+ * @wq_head: the waitqueue to wait on
+ * @condition: a C expression for the event to wait for
+ * @cmd1: the command will be executed before sleep
+ * @cmd2: the command will be executed after sleep
+ *
+ * The process is put to sleep (TASK_UNINTERRUPTIBLE) until the
+ * @condition evaluates to true. The @condition is checked each time
+ * the waitqueue @wq_head is woken up.
+ *
+ * wake_up() has to be called after changing any variable that could
+ * change the result of the wait condition.
+ */
+#define wait_event_cmd(wq_head, condition, cmd1, cmd2)
+#+end_src
+*** wait_event_interruptible
+#+begin_src c
+/**
+ * wait_event_interruptible - sleep until a condition gets true
+ * @wq_head: the waitqueue to wait on
+ * @condition: a C expression for the event to wait for
+ *
+ * The process is put to sleep (TASK_INTERRUPTIBLE) until the
+ * @condition evaluates to true or a signal is received.
+ * The @condition is checked each time the waitqueue @wq_head is woken up.
+ *
+ * wake_up() has to be called after changing any variable that could
+ * change the result of the wait condition.
+ *
+ * The function will return -ERESTARTSYS if it was interrupted by a
+ * signal and 0 if @condition evaluated to true.
+ */
+#define wait_event_interruptible(wq_head, condition)
+#+end_src
+*** wait_event_interruptible_timeout
+#+begin_src c
+/**
+ * wait_event_interruptible_timeout - sleep until a condition gets true or a timeout elapses
+ * @wq_head: the waitqueue to wait on
+ * @condition: a C expression for the event to wait for
+ * @timeout: timeout, in jiffies
+ *
+ * The process is put to sleep (TASK_INTERRUPTIBLE) until the
+ * @condition evaluates to true or a signal is received.
+ * The @condition is checked each time the waitqueue @wq_head is woken up.
+ *
+ * wake_up() has to be called after changing any variable that could
+ * change the result of the wait condition.
+ *
+ * Returns:
+ * 0 if the @condition evaluated to %false after the @timeout elapsed,
+ * 1 if the @condition evaluated to %true after the @timeout elapsed,
+ * the remaining jiffies (at least 1) if the @condition evaluated
+ * to %true before the @timeout elapsed, or -%ERESTARTSYS if it was
+ * interrupted by a signal.
+ */
+#define wait_event_interruptible_timeout(wq_head, condition, timeout)
+#+end_src
+*** wait_event_killable
+#+begin_src c
+/**
+ * wait_event_killable - sleep until a condition gets true
+ * @wq_head: the waitqueue to wait on
+ * @condition: a C expression for the event to wait for
+ *
+ * The process is put to sleep (TASK_KILLABLE) until the
+ * @condition evaluates to true or a signal is received.
+ * The @condition is checked each time the waitqueue @wq_head is woken up.
+ *
+ * wake_up() has to be called after changing any variable that could
+ * change the result of the wait condition.
+ *
+ * The function will return -ERESTARTSYS if it was interrupted by a
+ * signal and 0 if @condition evaluated to true.
+ */
+#define wait_event_killable(wq_head, condition)
+#+end_src
+
+** wake up
+*** wake_up
+wakes up only one process from the wait queue which is in non-interruptible sleep.
+#+begin_src c
+#define wake_up(x)			__wake_up(x, TASK_NORMAL, 1, NULL)
+#+end_src
+*** wake_up_all
+wakes up all the processes on the wait queue
+#+begin_src c
+#define wake_up_all(x)			__wake_up(x, TASK_NORMAL, 0, NULL)
+#+end_src
+*** wake_up_interruptible
+wakes up only one process from the wait queue that is in interruptible sleep
+#+begin_src c
+#define wake_up_interruptible(x)	__wake_up(x, TASK_INTERRUPTIBLE, 1, NULL)
+#+end_src
+*** wake_up_sync
+Sync avoids rescheduling of cpu.
+Normally, a wake_up call can cause an immediate reschedule to happen, meaning that other processes might run before wake_up returns. The “synchronous” variants instead make any awakened processes runnable but do not reschedule the CPU. This is used to avoid rescheduling when the current process is known to be going to sleep, thus forcing a reschedule anyway. Note that awakened processes could run immediately on a different processor, so these functions should not be expected to provide mutual exclusion.
+
+* Template
+#+begin_src c
+uint32_t read_count = 0;
+static struct task_struct *wait_thread;
+ 
+DECLARE_WAIT_QUEUE_HEAD(wait_queue_etx);
+ 
+dev_t dev = 0;
+static struct class *dev_class;
+static struct cdev etx_cdev;
+int wait_queue_flag = 0;
+
+/*
+**Function Prototypes
+*/
+static int      __init etx_driver_init(void);
+static void     __exit etx_driver_exit(void);
+ 
+/*************** Driver functions **********************/
+static int      etx_open(struct inode *inode, struct file *file);
+static int      etx_release(struct inode *inode, struct file *file);
+static ssize_t  etx_read(struct file *filp, char __user *buf, size_t len,loff_t * off);
+static ssize_t  etx_write(struct file *filp, const char *buf, size_t len, loff_t * off);
+
+/*
+**File operation sturcture
+*/
+static struct file_operations fops =
+{
+        .owner          = THIS_MODULE,
+        .read           = etx_read,
+        .write          = etx_write,
+        .open           = etx_open,
+        .release        = etx_release,
+};
+
+/*
+**Thread function
+*/
+static int wait_function(void *unused)
+{
+        
+        while(1) {
+                pr_info("Waiting For Event...\n");
+                wait_event_interruptible(wait_queue_etx, wait_queue_flag != 0 );
+                if(wait_queue_flag == 2) {
+                        pr_info("Event Came From Exit Function\n");
+                        return 0;
+                }
+                pr_info("Event Came From Read Function - %d\n", ++read_count);
+                wait_queue_flag = 0;
+        }
+        do_exit(0);
+        return 0;
+}
+
+/*
+**This function will be called when we open the Device file
+*/
+static int etx_open(struct inode *inode, struct file *file)
+{
+        pr_info("Device File Opened...!!!\n");
+        return 0;
+}
+
+/*
+**This function will be called when we close the Device file
+*/
+static int etx_release(struct inode *inode, struct file *file)
+{
+        pr_info("Device File Closed...!!!\n");
+        return 0;
+}
+
+/*
+**This function will be called when we read the Device file
+*/
+static ssize_t etx_read(struct file *filp, char __user *buf, size_t len, loff_t *off)
+{
+        pr_info("Read Function\n");
+        wait_queue_flag = 1;
+        wake_up_interruptible(&wait_queue_etx);
+        return 0;
+}
+
+/*
+**Module Init function
+*/
+static int __init etx_driver_init(void)
+{
+        /*Allocating Major number*/
+        if((alloc_chrdev_region(&dev, 0, 1, "etx_Dev")) <0){
+                pr_info("Cannot allocate major number\n");
+                return -1;
+        }
+        pr_info("Major = %d Minor = %d \n",MAJOR(dev), MINOR(dev));
+ 
+        /*Creating cdev structure*/
+        cdev_init(&etx_cdev,&fops);
+        etx_cdev.owner = THIS_MODULE;
+        etx_cdev.ops = &fops;
+ 
+        /*Adding character device to the system*/
+        if((cdev_add(&etx_cdev,dev,1)) < 0){
+            pr_info("Cannot add the device to the system\n");
+            goto r_class;
+        }
+ 
+        /*Creating struct class*/
+        if(IS_ERR(dev_class = class_create(THIS_MODULE,"etx_class"))){
+            pr_info("Cannot create the struct class\n");
+            goto r_class;
+        }
+ 
+        /*Creating device*/
+        if(IS_ERR(device_create(dev_class,NULL,dev,NULL,"etx_device"))){
+            pr_info("Cannot create the Device 1\n");
+            goto r_device;
+        }
+ 
+        //Create the kernel thread with name 'mythread'
+        wait_thread = kthread_create(wait_function, NULL, "WaitThread");
+        if (wait_thread) {
+                pr_info("Thread Created successfully\n");
+                wake_up_process(wait_thread);
+        } else
+                pr_info("Thread creation failed\n");
+ 
+        pr_info("Device Driver Insert...Done!!!\n");
+        return 0;
+ 
+r_device:
+        class_destroy(dev_class);
+r_class:
+        unregister_chrdev_region(dev,1);
+        return -1;
+}
+
+/*
+**Module exit function
+*/ 
+static void __exit etx_driver_exit(void)
+{
+        wait_queue_flag = 2;
+        wake_up_interruptible(&wait_queue_etx);
+        device_destroy(dev_class,dev);
+        class_destroy(dev_class);
+        cdev_del(&etx_cdev);
+        unregister_chrdev_region(dev, 1);
+        pr_info("Device Driver Remove...Done!!!\n");
+}
+ 
+module_init(etx_driver_init);
+module_exit(etx_driver_exit);
+#+end_src

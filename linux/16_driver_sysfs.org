@@ -1,0 +1,135 @@
+* Sysfs
+sysfs is kinda like proc directory, which belongs to linux virtual file system. And as we already know that proc directory provides us some necessary information about process. *sysfs* is the commonly used method to export system information from the kernel space to the user space for specific devices. The SysFS is tied to the device driver model of the kernel. The *procfs* is used to export the process-specific information and the *debugfs* is used to export the debug information by the developer.
+
+** kernel object
+The kernel object is the main heart of the sysfs. It is a bridge that binds the sysfs and the kernel.
+#+begin_src c
+struct kobject {
+	const char		*name;
+	struct list_head	entry;
+	struct kobject		*parent;
+	struct kset		*kset;
+	struct kobj_type	*ktype;
+	struct kernfs_node	*sd; /* sysfs directory entry */
+	struct kref		kref;
+#ifdef CONFIG_DEBUG_KOBJECT_RELEASE
+	struct delayed_work	release;
+#endif
+	unsigned int state_initialized:1;
+	unsigned int state_in_sysfs:1;
+	unsigned int state_add_uevent_sent:1;
+	unsigned int state_remove_uevent_sent:1;
+	unsigned int uevent_suppress:1;
+};
+ - A kobject is an object of type struct kobject.  Kobjects have a name
+   and a reference count.  A kobject also has a parent pointer (allowing
+   objects to be arranged into hierarchies), a specific type, and,
+   usually, a representation in the sysfs virtual filesystem.
+
+   Kobjects are generally not interesting on their own; instead, they are
+   usually embedded within some other structure which contains the stuff
+   the code is really interested in.
+
+   No structure should **EVER** have more than one kobject embedded within it.
+   If it does, the reference counting for the object is sure to be messed
+   up and incorrect, and your code will be buggy.  So do not do this.
+
+ - A ktype is the type of object that embeds a kobject.  Every structure
+   that embeds a kobject needs a corresponding ktype.  The ktype controls
+   what happens to the kobject when it is created and destroyed.
+
+ - A kset is a group of kobjects.  These kobjects can be of the same ktype
+   or belong to different ktypes.  The kset is the basic container type for
+   collections of kobjects. Ksets contain their own kobjects, but you can
+   safely ignore that implementation detail as the kset core code handles
+   this kobject automatically.
+
+   When you see a sysfs directory full of other directories, generally each
+   of those directories corresponds to a kobject in the same kset.
+#+end_src
+
+** create sysfs directory
+This function is defined in /lib/kobject.c.
+#+begin_src c
+/**
+ * kobject_create_and_add() - Create a struct kobject dynamically and
+ *                            register it with sysfs.
+ * @name: the name for the kobject
+ * @parent: the parent kobject of this kobject, if any.
+ *
+ * This function creates a kobject structure dynamically and registers it
+ * with sysfs.  When you are finished with this structure, call
+ * kobject_put() and the structure will be dynamically freed when
+ * it is no longer being used.
+ *
+ * If the kobject was not able to be created, NULL will be returned.
+ */
+struct kobject *kobject_create_and_add(const char *name, struct kobject *parent)
+#+end_src
+
+If you pass kernel_kobj to the second argument, it will create the directory under /sys/kernel/. If you pass firmware_kobj to the second argument, it will create the directory under /sys/firmware/. If you pass fs_kobj to the second argument, it will create the directory under /sys/fs/. If you pass NULL to the second argument, it will create the directory under /sys/.
+
+** create sysfs file
+This function is defined in /fs/sysfs/file.c.
+#+begin_src c
+int sysfs_create_files(struct kobject *kobj, const struct attribute * const *ptr)
+#+end_src
+In addition, we have to give the parameter of struct attribute, there are many ways to setup this structure defined in include/linux/sysfs.h file.
+
+#+begin_src c
+struct kobj_attribute {
+	struct attribute attr;
+	ssize_t (*show)(struct kobject *kobj, struct kobj_attribute *attr,
+			char *buf);
+	ssize_t (*store)(struct kobject *kobj, struct kobj_attribute *attr,
+			 const char *buf, size_t count);
+};
+#+end_src
+attr – the attribute representing the file to be created,
+show – the pointer to the function that will be called when the file is read in sysfs,
+store – the pointer to the function which will be called when the file is written in sysfs.
+This macro can be used to initialize the kobj_attribute struct.
+#+begin_src c
+#define __ATTR(_name, _mode, _show, _store) {				\
+	.attr = {.name = __stringify(_name),				\
+		 .mode = VERIFY_OCTAL_PERMISSIONS(_mode) },		\
+	.show	= _show,						\
+	.store	= _store,						\
+}
+#+end_src
+
+** remove sysfs file
+#+begin_src c
+void sysfs_remove_files(struct kobject *kobj, const struct attribute * const *attr);
+#+end_src
+
+* Template
+#+begin_src c
+  struct kobj_attribute etx_attr = __ATTR(etx_value, 0660, sysfs_show, sysfs_store);
+
+static ssize_t sysfs_show(struct kobject *kobj, 
+                struct kobj_attribute *attr, char *buf)
+{
+    return sprintf(buf, "%d", etx_value);
+}
+
+static ssize_t sysfs_store(struct kobject *kobj, 
+                struct kobj_attribute *attr,const char *buf, size_t count)
+{
+        sscanf(buf,"%d",&etx_value);
+        return count;
+}
+
+//This Function will be called from Init function
+/*Creating a directory in /sys/kernel/ */
+kobj_ref = kobject_create_and_add("etx_sysfs",kernel_kobj);
+ 
+/*Creating sysfs file for etx_value*/
+if(sysfs_create_file(kobj_ref,&etx_attr.attr)){
+    printk(KERN_INFO"Cannot create sysfs file......\n");
+    goto r_sysfs;
+}
+//This should be called from exit function
+kobject_put(kobj_ref); 
+sysfs_remove_file(kernel_kobj, &etx_attr.attr);
+#+end_src

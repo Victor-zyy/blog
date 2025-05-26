@@ -1,0 +1,132 @@
+* ioctl in linux
+ioctl aka input and output control, which is used to talk to device drivers. It is allowed to dive into kernel space when user running in user space. Like change the serial baud-rate you can use the system call, linux provides this system call in order to help things that don't have other system calls by default. Or so, change registers of hardware can use this function.
+
+* Driver Layer
+** IOCTL Command
+#+begin_src c
+#define "ioctl name" __IOX("magic number","command number","argument type")
+/*
+ * Used to create numbers.
+ *
+ * NOTE: _IOW means userland is writing and kernel is reading. _IOR
+ * means userland is reading and kernel is writing.
+ */
+//include/uapi/asm-generic/ioctl.h
+#define _IO(type,nr)		_IOC(_IOC_NONE,(type),(nr),0)
+#define _IOR(type,nr,size)	_IOC(_IOC_READ,(type),(nr),(_IOC_TYPECHECK(size)))
+#define _IOW(type,nr,size)	_IOC(_IOC_WRITE,(type),(nr),(_IOC_TYPECHECK(size)))
+#define _IOWR(type,nr,size)	_IOC(_IOC_READ|_IOC_WRITE,(type),(nr),(_IOC_TYPECHECK(size)))
+#define _IOR_BAD(type,nr,size)	_IOC(_IOC_READ,(type),(nr),sizeof(size))
+#define _IOW_BAD(type,nr,size)	_IOC(_IOC_WRITE,(type),(nr),sizeof(size))
+#define _IOWR_BAD(type,nr,size)	_IOC(_IOC_READ|_IOC_WRITE,(type),(nr),sizeof(size))
+#+end_src
+majic number indicates that our ioctl call differs other ioctl system call. It is a unique numbe.
+command number used for separate different sets of commands like write or read etc.
+Example:
+#+begin_src c
+#include <linux/ioctl.h>
+#define WR_VALUE _IOW('a','a',int32_t*)
+#define RD_VALUE _IOR('a','b',int32_t*)
+#+end_src
+** IOCTL Function
+#+begin_src c
+long (*unlocked_ioctl) (struct file *, unsigned int, unsigned long);
+  //defined in struct file_operations
+int  ioctl(struct inode *inode,struct file *file,unsigned int cmd,unsigned long arg) 
+#+end_src
+
+* User Layer
+** user layer command
+#+begin_src c
+#define WR_VALUE _IOW('a','a',int32_t*)
+#define RD_VALUE _IOR('a','b',int32_t*)
+#+end_src
+** user layer function
+#+begin_src c
+long ioctl( "file descriptor","ioctl command","Arguments");
+#+end_src
+* Template
+** driver layer
+#+begin_src c
+/*
+**This function will be called when we write IOCTL on the Device file
+*/
+static long etx_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+         switch(cmd) {
+                case WR_VALUE:
+                        if( copy_from_user(&value ,(int32_t*) arg, sizeof(value)) )
+                        {
+                                pr_err("Data Write : Err!\n");
+                        }
+                        pr_info("Value = %d\n", value);
+                        break;
+                case RD_VALUE:
+                        if( copy_to_user((int32_t*) arg, &value, sizeof(value)) )
+                        {
+                                pr_err("Data Read : Err!\n");
+                        }
+                        break;
+                default:
+                        pr_info("Default\n");
+                        break;
+        }
+        return 0;
+}
+#+end_src
+** test-ioctl app
+#+begin_src c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <sys/types.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include<sys/ioctl.h>
+ 
+#define WR_VALUE _IOW('a','a',int32_t*)
+#define RD_VALUE _IOR('a','b',int32_t*)
+ 
+int main()
+{
+        int fd;
+        int32_t value, number;
+        printf("*********************************\n");
+ 
+        printf("\nOpening Driver\n");
+        fd = open("/dev/etx_device", O_RDWR);
+        if(fd < 0) {
+                printf("Cannot open device file...\n");
+                return 0;
+        }
+ 
+        printf("Enter the Value to send\n");
+        scanf("%d",&number);
+        printf("Writing Value to Driver\n");
+        ioctl(fd, WR_VALUE, (int32_t*) &number); 
+ 
+        printf("Reading Value from Driver\n");
+        ioctl(fd, RD_VALUE, (int32_t*) &value);
+        printf("Value is %d\n", value);
+ 
+        printf("Closing Driver\n");
+        close(fd);
+}
+#+end_src
+
+** result
+#+begin_src c
+~ # ./test-ioctl 
+Opening Driver
+[   96.872810] Device File Opened...!!!
+Enter the Value to send
+123456
+Writing Value to Driver
+[  100.597598] Value = 123456
+Reading Value from Driver
+Value is 123456
+Closing Driver
+[  100.624754] Device File Closed...!!!
+~ # 
+#+end_src
