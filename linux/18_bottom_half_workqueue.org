@@ -1,0 +1,237 @@
+* WorkQueue
+
+if we have more work when interrupt hits, then we need the bottom half. The bottom half runs in the future, at a more convenient time, with all interrupts enabled. Work in the future is the key point in bottom half interrupt mechanism.
+
+characterisc, the workqueue defer work into the kernel thread, and the bottom halves run in the process context.
+That's to say, workqueue has all the benefits of process context and can be scheduable later in the future.
+If the deferred work needs to sleep, then workqueue is used.
+If the deferred work needs not sleep, then softirq or tasklet are used.
+
+Questions
+workqueue process context ?
+
+** global workqueue
+*** statically method
+#+begin_src c
+#define DECLARE_WORK(n, f)						\
+	struct work_struct n = __WORK_INITIALIZER(n, f)
+#+end_src
+*** dynamically method
+#+begin_src c
+#define INIT_WORK(_work, _func)						\
+	__INIT_WORK((_work), (_func), 0)
+#+end_src
+*** work to queue
+**** schedule_work
+#+begin_src c
+/**
+ * schedule_work - put work task in global workqueue
+ * @work: job to be done
+ *
+ * Returns %false if @work was already on the kernel-global workqueue and
+ * %true otherwise.
+ *
+ * This puts a job in the kernel-global workqueue if it was not already
+ * queued and leaves it in the same position on the kernel-global
+ * workqueue otherwise.
+ *
+ * Shares the same memory-ordering properties of queue_work(), cf. the
+ * DocBook header of queue_work().
+ */
+static inline bool schedule_work(struct work_struct *work)
+{
+	return queue_work(system_wq, work);
+}
+#+end_src
+**** schedule_delayed_work
+#+begin_src c
+/**
+ * schedule_delayed_work - put work task in global workqueue after delay
+ * @dwork: job to be done
+ * @delay: number of jiffies to wait or 0 for immediate execution
+ *
+ * After waiting for a given time this puts a job in the kernel-global
+ * workqueue.
+ */
+static inline bool schedule_delayed_work(struct delayed_work *dwork,
+					 unsigned long delay)
+{
+	return queue_delayed_work(system_wq, dwork, delay);
+}
+#+end_src
+**** schedule_work_on
+#+begin_src c
+/**
+ * schedule_work_on - put work task on a specific cpu
+ * @cpu: cpu to put the work task on
+ * @work: job to be done
+ *
+ * This puts a job on a specific cpu
+ */
+static inline bool schedule_work_on(int cpu, struct work_struct *work)
+{
+	return queue_work_on(cpu, system_wq, work);
+}
+#+end_src
+**** schedule_work_delayed_on
+#+begin_src c
+/**
+ * schedule_delayed_work_on - queue work in global workqueue on CPU after delay
+ * @cpu: cpu to use
+ * @dwork: job to be done
+ * @delay: number of jiffies to wait
+ *
+ * After waiting for a given time this puts a job in the kernel-global
+ * workqueue on the specified CPU.
+ */
+static inline bool schedule_delayed_work_on(int cpu, struct delayed_work *dwork,
+					    unsigned long delay)
+{
+	return queue_delayed_work_on(cpu, system_wq, dwork, delay);
+}
+#+end_src
+*** delete workqueue
+This function is defined in kernel/workqueue.c file
+#+begin_src c
+/**
+ * flush_work - wait for a work to finish executing the last queueing instance
+ * @work: the work to flush
+ *
+ * Wait until @work has finished execution.  @work is guaranteed to be idle
+ * on return if it hasn't been requeued since flush started.
+ *
+ * Return:
+ * %true if flush_work() waited for the work to finish execution,
+ * %false if it was already idle.
+ */
+bool flush_work(struct work_struct *work)
+{
+	return __flush_work(work, false);
+}
+EXPORT_SYMBOL_GPL(flush_work);
+#+end_src
+*** cancel workqueue
+#+begin_src c
+/**
+ * cancel_work_sync - cancel a work and wait for it to finish
+ * @work: the work to cancel
+ *
+ * Cancel @work and wait for its execution to finish.  This function
+ * can be used even if the work re-queues itself or migrates to
+ * another workqueue.  On return from this function, @work is
+ * guaranteed to be not pending or executing on any CPU.
+ *
+ * cancel_work_sync(&delayed_work->work) must not be used for
+ * delayed_work's.  Use cancel_delayed_work_sync() instead.
+ *
+ * The caller must ensure that the workqueue on which @work was last
+ * queued can't be destroyed before this function returns.
+ *
+ * Return:
+ * %true if @work was pending, %false otherwise.
+ */
+bool cancel_work_sync(struct work_struct *work)
+{
+	return __cancel_work_timer(work, false);
+}
+EXPORT_SYMBOL_GPL(cancel_work_sync);
+#+end_src
+*** check_workqueue
+** create own workqueue
+No matter which choice we choose in using statically or dynamically method, we all use the global workqueue supported by linux kernel. Actually we haven't create any workqueue on our own. 
+The core workqueue is represented by structure struct workqueue_struct, which is the structure onto which work is placed. This work is added to the queue in the top half (Interrupt context) and the execution of this work happened in the bottom half (Kernel context).The work is represented by structure struct work_struct, which identifies the work and the deferral function.
+*** create_workqueue
+#+begin_src c
+#define create_workqueue(name)						\
+	alloc_workqueue("%s", __WQ_LEGACY | WQ_MEM_RECLAIM, 1, (name))
+#+end_src
+*** destroy_workqueue
+#+begin_src c
+/**
+ * destroy_workqueue - safely terminate a workqueue
+ * @wq: target workqueue
+ *
+ * Safely destroy a workqueue. All work currently pending will be done first.
+ */
+void destroy_workqueue(struct workqueue_struct *wq)
+#+end_src
+*** alloc_workqueue
+#+begin_src c
+struct workqueue_struct *alloc_workqueue(const char *fmt,
+					 unsigned int flags,
+					 int max_active, ...)
+#+end_src
+flags are listed below,
+#+begin_src c
+WQ_UNBOUND		= 1 << 1, /* not bound to any cpu */
+WQ_FREEZABLE		= 1 << 2, /* freeze during suspend */
+WQ_MEM_RECLAIM		= 1 << 3, /* may be used for memory reclaim */
+WQ_HIGHPRI		= 1 << 4, /* high priority */
+WQ_CPU_INTENSIVE	= 1 << 5, /* cpu intensive workqueue */
+WQ_SYSFS		= 1 << 6, /* visible in sysfs, see workqueue_sysfs_register() */
+#+end_src
+* Template
+** statically method
+#+begin_src c
+void workqueue_fn(struct work_struct *work); 
+
+/*Creating work by Static Method */
+DECLARE_WORK(workqueue,workqueue_fn);
+
+/*Workqueue Function*/
+void workqueue_fn(struct work_struct *work)
+{
+        printk(KERN_INFO "Executing Workqueue Function\n");
+}
+//Interrupt handler for IRQ 11. 
+static irqreturn_t irq_handler(int irq,void *dev_id) {
+    printk(KERN_INFO "Shared IRQ: Interrupt Occurred");
+    schedule_work(&workqueue);
+
+    return IRQ_HANDLED;
+}
+#+end_src
+
+** dynamically method
+#+begin_src c
+/*
+**Module Init function
+*/ 
+static int __init etx_driver_init(void)
+{
+        /*Creating work by Dynamic Method */
+        INIT_WORK(&workqueue,workqueue_fn);
+} 
+#+end_src
+** create own workqueue
+
+#+begin_src c
+  static struct workqueue_struct *own_workqueue;
+ 
+static void workqueue_fn(struct work_struct *work); 
+ 
+static DECLARE_WORK(work, workqueue_fn);
+ 
+ 
+/*Workqueue Function*/
+static void workqueue_fn(struct work_struct *work)
+{
+    printk(KERN_INFO "Executing Workqueue Function\n");
+    return;
+        
+}
+ 
+ 
+//Interrupt handler for IRQ 11. 
+static irqreturn_t irq_handler(int irq,void *dev_id) {
+        printk(KERN_INFO "Shared IRQ: Interrupt Occurred\n");
+        /*Allocating work to queue*/
+        queue_work(own_workqueue, &work);
+        
+        return IRQ_HANDLED;
+}
+#+end_src
+The difference of *queue_work* and *schedule_work*.
+If you want to use your own dedicated workqueue you should create a workqueue using create_workqueue. At that time you need to put work on your workqueue by using queue_work function.
+If you don’t want to create any own workqueue, you can use kernel global workqueue. In that condition, you can use schedule_work function to put your work to global workqueue.
+

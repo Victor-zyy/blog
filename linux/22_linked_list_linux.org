@@ -1,0 +1,508 @@
+* Linked List
+** linked_list
+Those are defined in /include/linux/types.h
+#+begin_src c
+struct list_head {
+	struct list_head *next, *prev;
+};
+
+struct hlist_head {
+	struct hlist_node *first;
+};
+
+struct hlist_node {
+	struct hlist_node *next, **pprev;
+};
+#+end_src
+
+** init list
+#+begin_src c
+#define LIST_HEAD_INIT(name) { &(name), &(name) }
+
+#define LIST_HEAD(name) \
+	struct list_head name = LIST_HEAD_INIT(name)
+#+end_src
+The node is empty if the prev and next are pointed to itself.
+
+** create node on list
+Actually we can create the linked-list with node dynamically or statically, but we this struct has to cover the *struct list_head* defined by linux-kernel.
+#+begin_src c
+  struct my_list{
+    struct list_head list;
+    int data;
+  };
+/**
+ * INIT_LIST_HEAD - Initialize a list_head structure
+ * @list: list_head structure to be initialized.
+ *
+ * Initializes the list_head to point to itself.  If it is a list header,
+ * the result is an empty list.
+ */
+static inline void INIT_LIST_HEAD(struct list_head *list)
+{
+	WRITE_ONCE(list->next, list);
+	WRITE_ONCE(list->prev, list);
+}
+#+end_src
+We use INIT_LIST_HEAD to initialize our list like such:
+#+begin_src c
+  struct my_list ml;
+  INIT_LIST_HEAD(&ml.list);
+#+end_src
+And WRITE_ONCE macro is defined in include/asm-generic/rwonce.h file.
+#+begin_src c
+#define __WRITE_ONCE(x, val)						\
+do {									\
+	*(volatile typeof(x) *)&(x) = (val);				\
+} while (0)
+
+#define WRITE_ONCE(x, val)						\
+do {									\
+	compiletime_assert_rwonce_type(x);				\
+	__WRITE_ONCE(x, val);						\
+} while (0)
+#+end_src
+
+** add node after head
+#+begin_src c
+/**
+ * list_add - add a new entry
+ * @new: new entry to be added
+ * @head: list head to add it after
+ *
+ * Insert a new entry after the specified head.
+ * This is good for implementing stacks.
+ */
+static inline void list_add(struct list_head *new, struct list_head *head)
+{
+	__list_add(new, head, head->next);
+}
+/*
+ * Insert a new entry between two known consecutive entries.
+ *
+ * This is only for internal list manipulation where we know
+ * the prev/next entries already!
+ */
+static inline void __list_add(struct list_head *new,
+			      struct list_head *prev,
+			      struct list_head *next)
+{
+	if (!__list_add_valid(new, prev, next))
+		return;
+
+	next->prev = new;
+	new->next = next;
+	new->prev = prev;
+	WRITE_ONCE(prev->next, new);
+}
+#+end_src
+
+** add node before head
+#+begin_src c
+/**
+ * list_add_tail - add a new entry
+ * @new: new entry to be added
+ * @head: list head to add it before
+ *
+ * Insert a new entry before the specified head.
+ * This is useful for implementing queues.
+ */
+static inline void list_add_tail(struct list_head *new, struct list_head *head)
+{
+	__list_add(new, head->prev, head);
+}
+#+end_src
+
+** delete node
+#+begin_src c
+/**
+ * list_del - deletes entry from list.
+ * @entry: the element to delete from the list.
+ * Note: list_empty() on entry does not return true after this, the entry is
+ * in an undefined state.
+ */
+static inline void list_del(struct list_head *entry)
+{
+	__list_del_entry(entry);
+	entry->next = LIST_POISON1;
+	entry->prev = LIST_POISON2;
+}
+#+end_src
+By disconnecting the prev and next pointers, but it doesn't free allocated memory of this node.
+#+begin_src c
+/**
+ * list_del_init - deletes entry from list and reinitialize it.
+ * @entry: the element to delete from the list.
+ */
+static inline void list_del_init(struct list_head *entry)
+{
+	__list_del_entry(entry);
+	INIT_LIST_HEAD(entry);
+}
+#+end_src
+
+** replace node
+#+begin_src c
+/**
+ * list_replace - replace old entry by new one
+ * @old : the element to be replaced
+ * @new : the new element to insert
+ *
+ * If @old was empty, it will be overwritten.
+ */
+static inline void list_replace(struct list_head *old,
+				struct list_head *new)
+{
+	new->next = old->next;
+	new->next->prev = new;
+	new->prev = old->prev;
+	new->prev->next = new;
+}
+#+end_src
+#+begin_src c
+/**
+ * list_replace_init - replace old entry by new one and initialize the old one
+ * @old : the element to be replaced
+ * @new : the new element to insert
+ *
+ * If @old was empty, it will be overwritten.
+ */
+static inline void list_replace_init(struct list_head *old,
+				     struct list_head *new)
+{
+	list_replace(old, new);
+	INIT_LIST_HEAD(old);
+}
+#+end_src
+** move node
+#+begin_src c
+/**
+ * list_move - delete from one list and add as another's head
+ * @list: the entry to move
+ * @head: the head that will precede our entry
+ */
+static inline void list_move(struct list_head *list, struct list_head *head)
+{
+	__list_del_entry(list);
+	list_add(list, head);
+}
+static inline void __list_del_entry(struct list_head *entry)
+{
+	if (!__list_del_entry_valid(entry))
+		return;
+
+	__list_del(entry->prev, entry->next);
+}
+/*
+ * Delete a list entry by making the prev/next entries
+ * point to each other.
+ *
+ * This is only for internal list manipulation where we know
+ * the prev/next entries already!
+ */
+static inline void __list_del(struct list_head * prev, struct list_head * next)
+{
+	next->prev = prev;
+	WRITE_ONCE(prev->next, next);
+}
+
+#+end_src
+
+#+begin_src c
+/**
+ * list_move_tail - delete from one list and add as another's tail
+ * @list: the entry to move
+ * @head: the head that will follow our entry
+ */
+static inline void list_move_tail(struct list_head *list,
+				  struct list_head *head)
+{
+	__list_del_entry(list);
+	list_add_tail(list, head);
+}
+#+end_src
+
+** rotate node
+#+begin_src c
+/**
+ * list_rotate_left - rotate the list to the left
+ * @head: the head of the list
+ */
+static inline void list_rotate_left(struct list_head *head)
+{
+	struct list_head *first;
+
+	if (!list_empty(head)) {
+		first = head->next;
+		list_move_tail(first, head);
+	}
+}
+#+end_src
+** test linked list
+#+begin_src c
+/**
+ * list_is_last - tests whether @list is the last entry in list @head
+ * @list: the entry to test
+ * @head: the head of the list
+ */
+static inline int list_is_last(const struct list_head *list, const struct list_head *head)
+{
+	return list->next == head;
+}
+#+end_src
+
+#+begin_src c
+/**
+ * list_empty - tests whether a list is empty
+ * @head: the list to test.
+ */
+static inline int list_empty(const struct list_head *head)
+{
+	return READ_ONCE(head->next) == head;
+}
+#+end_src
+
+#+begin_src c
+/**
+ * list_is_singular - tests whether a list has just one entry.
+ * @head: the list to test.
+ */
+static inline int list_is_singular(const struct list_head *head)
+{
+	return !list_empty(head) && (head->next == head->prev);
+}
+#+end_src
+
+** spilt list
+#+begin_src c
+/**
+ * list_cut_position - cut a list into two
+ * @list: a new list to add all removed entries
+ * @head: a list with entries
+ * @entry: an entry within head, could be the head itself
+ *	and if so we won't cut the list
+ *
+ * This helper moves the initial part of @head, up to and
+ * including @entry, from @head to @list. You should
+ * pass on @entry an element you know is on @head. @list
+ * should be an empty list or a list you do not care about
+ * losing its data.
+ *
+ */
+static inline void list_cut_position(struct list_head *list,
+		struct list_head *head, struct list_head *entry)
+{
+	if (list_empty(head))
+		return;
+	if (list_is_singular(head) && !list_is_head(entry, head) && (entry != head->next))
+		return;
+	if (list_is_head(entry, head))
+		INIT_LIST_HEAD(list);
+	else
+		__list_cut_position(list, head, entry);
+}
+#+end_src
+
+** join linked list
+#+begin_src c
+/**
+ * list_splice - join two lists, this is designed for stacks
+ * @list: the new list to add.
+ * @head: the place to add it in the first list.
+ */
+static inline void list_splice(const struct list_head *list,
+				struct list_head *head)
+{
+	if (!list_empty(list))
+		__list_splice(list, head, head->next);
+}
+#+end_src
+
+** traverse list
+#+begin_src c
+/**
+ * list_entry - get the struct for this entry
+ * @ptr:	the &struct list_head pointer.
+ * @type:	the type of the struct this is embedded in.
+ * @member:	the name of the list_head within the struct.
+ */
+#define list_entry(ptr, type, member) \
+	container_of(ptr, type, member)
+#+end_src
+
+#+begin_src c
+/**
+ * list_for_each	-	iterate over a list
+ * @pos:	the &struct list_head to use as a loop cursor.
+ * @head:	the head for your list.
+ */
+#define list_for_each(pos, head) \
+	for (pos = (head)->next; !list_is_head(pos, (head)); pos = pos->next)
+#+end_src
+
+#+begin_src c
+/**
+ * list_for_each_entry	-	iterate over list of given type
+ * @pos:	the type * to use as a loop cursor.
+ * @head:	the head for your list.
+ * @member:	the name of the list_head within the struct.
+ */
+#define list_for_each_entry(pos, head, member)				\
+	for (pos = list_first_entry(head, typeof(*pos), member);	\
+	     !list_entry_is_head(pos, head, member);			\
+	     pos = list_next_entry(pos, member))
+#+end_src
+
+#+begin_src c
+/**
+ * list_for_each_entry_reverse - iterate backwards over list of given type.
+ * @pos:	the type * to use as a loop cursor.
+ * @head:	the head for your list.
+ * @member:	the name of the list_head within the struct.
+ */
+#define list_for_each_entry_reverse(pos, head, member)			\
+	for (pos = list_last_entry(head, typeof(*pos), member);		\
+	     !list_entry_is_head(pos, head, member); 			\
+	     pos = list_prev_entry(pos, member))
+#+end_src
+
+* Example Usage
+#+begin_src c
+  
+volatile int etx_value = 0;
+ 
+dev_t dev = 0;
+static struct class *dev_class;
+static struct cdev etx_cdev;
+struct kobject *kobj_ref;
+ 
+static int __init etx_driver_init(void);
+static void __exit etx_driver_exit(void);
+ 
+static struct workqueue_struct *own_workqueue;
+ 
+ 
+static void workqueue_fn(struct work_struct *work); 
+ 
+static DECLARE_WORK(work, workqueue_fn);
+ 
+/*Linked List Node*/
+struct my_list{
+     struct list_head list;     //linux kernel list implementation
+     int data;
+};
+ 
+/*Declare and init the head node of the linked list*/
+LIST_HEAD(Head_Node);
+ 
+ 
+/*Workqueue Function*/
+static void workqueue_fn(struct work_struct *work)
+{
+        struct my_list *temp_node = NULL;
+ 
+        printk(KERN_INFO "Executing Workqueue Function\n");
+        
+        /*Creating Node*/
+        temp_node = kmalloc(sizeof(struct my_list), GFP_KERNEL);
+ 
+        /*Assgin the data that is received*/
+        temp_node->data = etx_value;
+ 
+        /*Init the list within the struct*/
+        INIT_LIST_HEAD(&temp_node->list);
+ 
+        /*Add Node to Linked List*/
+        list_add_tail(&temp_node->list, &Head_Node);
+}
+/*
+**This fuction will be called when we write the Device file
+*/
+static ssize_t etx_write(struct file *filp, 
+                const char __user *buf, size_t len, loff_t *off)
+{
+        printk(KERN_INFO "Write Function\n");
+        /*Copying data from user space*/
+        //sscanf(buf,"%d",&etx_value);
+	pr_info("len : %d\n", (int)len);
+	if(copy_from_user((void *)&etx_value , (int*)buf, sizeof(etx_value))){
+          pr_err("Data Write : Err!\n");
+	  return 0;
+	}
+        pr_info("etx_value = %x\n", etx_value);
+        /* Triggering Interrupt */
+
+        queue_work(own_workqueue, &work);
+        // asm("int $0x3B");  // Corresponding to irq 11
+        return len;
+}
+#+end_src
+
+Through debugging tool strace, we can easily know that what and how long buf written to this device file.
+#+begin_src sh
+~ # /usr/local/bin/strace echo 10 > /dev/etx_device 
+[  411.055370] Device File Opened...!!!
+execve("/bin/echo", ["echo", "10"], 0x3fddc52d98 /* 7 vars */) = 0
+brk(NULL)                               = 0x1ca000
+brk(0x1cabb8)                           = 0x1cabb8
+set_tid_address(0x1ca0d0)               = 41
+set_robust_list(0x1ca0e0, 24)           = 0
+uname({sysname="Linux", nodename="(none)", ...}) = 0
+prlimit64(0, RLIMIT_STACK, NULL, {rlim_cur=8192*1024, rlim_max=RLIM64_INFINITY}) = 0
+readlinkat(AT_FDCWD, "/proc/self/exe", "/bin/busybox", 4096) = 12
+getrandom(0x1c8200, 8, GRND_NONBLOCK)   = -1 EAGAIN (Resource temporarily unavailable)
+clock_gettime(CLOCK_MONOTONIC, {tv_sec=411, tv_nsec=294530600}) = 0
+clock_gettime(CLOCK_MONOTONIC, {tv_sec=411, tv_nsec=300372600}) = 0
+brk(0x1ebbb8)                           = 0x1ebbb8
+brk(0x1ec000)                           = 0x1ec000
+mprotect(0x1b9000, 28672, PROT_READ)    = 0
+getuid()                                = 0
+write(1, "10\n", 3[  411.370006] Write Function
+[  411.370303] len : 3
+[  411.370517] etx_value = 667697
+[  411.371244] Executing Workqueue Function
+)                     = 3
+exit_group(0)                           = ?
++++ exited with 0 +++
+[  411.390213] Device File Closed...!!!
+#+end_src
+
+But the etx_value isn't write actually. Then use the strace to understand these commands, we can already change the code to right place below.
+#+begin_src c
+static ssize_t etx_write(struct file *filp, 
+                const char __user *buf, size_t len, loff_t *off)
+{
+
+        printk(KERN_INFO "Write Function\n");
+        /*Copying data from user space*/
+	pr_info("len : %d\n", (int)len);
+	if(copy_from_user(buf_save , buf, len - 1)){
+          pr_err("Data Write : Err!\n");
+	  return 0;
+	}
+        sscanf(buf_save,"%d",&etx_value);
+        pr_info("etx_value = %x\n", etx_value);
+        /* Triggering Interrupt */
+
+        queue_work(own_workqueue, &work);
+        // asm("int $0x3B");  // Corresponding to irq 11
+        return len;
+}
+#+end_src
+Now finally the code runs successfully.
+#+begin_src c
+  ~ # echo 10 > /dev/etx_device 
+[   29.372552] Device File Opened...!!!
+[   29.377508] Write Function
+[   29.378287] len : 3
+[   29.382505] etx_value = a
+[   29.384260] Executing Workqueue Function
+[   29.386476] Device File Closed...!!!
+~ # cat /dev/etx_device 
+[   45.000399] Device File Opened...!!!
+[   45.002926] Read function
+[   45.003229] Node 0 data = 10
+[   45.003518] Total Nodes = 1
+[   45.004302] Device File Closed...!!!
+~ # 
+#+end_src
