@@ -86,4 +86,51 @@ void kthread_bind(struct task_struct *p, unsigned int cpu)
 EXPORT_SYMBOL(kthread_bind);
 #+end_src
 
-* 
+** kthread_run
+#+begin_src c
+/**
+ * kthread_run - create and wake a thread.
+ * @threadfn: the function to run until signal_pending(current).
+ * @data: data ptr for @threadfn.
+ * @namefmt: printf-style name for the thread.
+ *
+ * Description: Convenient wrapper for kthread_create() followed by
+ * wake_up_process().  Returns the kthread or ERR_PTR(-ENOMEM).
+ */
+#define kthread_run(threadfn, data, namefmt, ...)			   \
+({									   \
+	struct task_struct *__k						   \
+		= kthread_create(threadfn, data, namefmt, ## __VA_ARGS__); \
+	if (!IS_ERR(__k))						   \
+		wake_up_process(__k);					   \
+	__k;								   \
+})
+#+end_src
+Kthread_run does two things one for kthread_create and then wake_up_this process.
+
+*  Template
+#+begin_src c
+int thread_function(void *pv);
+
+/*
+**Thread
+*/
+int thread_function(void *pv)
+{
+    int i=0;
+    while(!kthread_should_stop()) {
+        pr_info("In EmbeTronicX Thread Function %d\n", i++);
+        msleep(1000);
+    }
+    return 0;
+}
+    etx_thread = kthread_create(thread_function,NULL,"eTx Thread");
+    if(etx_thread) {
+        wake_up_process(etx_thread);
+    } else {
+        pr_err("Cannot create kthread\n");
+        goto r_device;
+    }
+#+end_src
+
+This kthread will print info per sec until you remove the kernel module.
