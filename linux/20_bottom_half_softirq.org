@@ -1,0 +1,69 @@
+* Softirq
+The softirq is rarely used as we have tasklets already. Most of the stuff, we can do using the tasklets. Do you know one thing? Tasklets also built on softirq.
+
+Softirqs are statically allocated at the compile time. So we cannot dynamically create or kill the softirqs. Softirqs are represented using the struct softirq_action which is defined in <linux/interrupt.h>.
+
+#+begin_src c
+  
+/* PLEASE, avoid to allocate new softirqs, if you need not _really_ high
+   frequency threaded job scheduling. For almost all the purposes
+   tasklets are more than enough. F.e. all serial device BHs et
+   al. should be converted to tasklets, not to softirqs.
+ */
+
+enum
+{
+	HI_SOFTIRQ=0,
+	TIMER_SOFTIRQ,
+	NET_TX_SOFTIRQ,
+	NET_RX_SOFTIRQ,
+	BLOCK_SOFTIRQ,
+	IRQ_POLL_SOFTIRQ,
+	TASKLET_SOFTIRQ,
+	SCHED_SOFTIRQ,
+	HRTIMER_SOFTIRQ,
+	RCU_SOFTIRQ,    /* Preferable RCU should always be the last softirq */
+
+	NR_SOFTIRQS
+};
+  
+/* softirq mask and active fields moved to irq_cpustat_t in
+ * asm/hardirq.h to get better cache usage.  KAO
+ */
+
+struct softirq_action
+{
+	void	(*action)(struct softirq_action *);
+};
+#+end_src
+
+** create softirq_handler
+** register softirq
+#+begin_src c
+void open_softirq( int nr, void (*action)(struct softirq_action *) );
+#+end_src
+** trigger softirq
+#+begin_src c
+void raise_softirq(unsigned int nr);
+#+end_src
+** notes
+
+
+1.A softirq never preempts another softirq. In fact, the only event that can preempt a softirq is an interrupt handler. Another softirq even the same one can run on another processor, however.
+2.Softirqs are reserved for the most timing-critical and important bottom-half processing on the system. If you are adding a new softirq, you normally want to ask yourself why using a tasklet is insufficient. Tasklets are dynamically created and are simpler to use because of their weaker locking requirements, and they still perform quite well. Nonetheless, for timing-critical applications that are able to do their own locking in an efficient way, softirqs might be the correct solution.
+3.Softirqs are most often raised from within interrupt handlers.
+
+
+* Example
+#+begin_src c
+static void gpio_interrupt_softirq_handler(struct softirq_action *action) 
+{
+  /* do your task */
+}
+
+/* Assign gpio_interrupt_softirq_handler to the HRTIMER_SOFTIRQ*/
+open_softirq( HRTIMER_SOFTIRQ, gpio_interrupt_softirq_handler );
+
+/* Raise the softirq */
+raise_softirq( HRTIMER_SOFTIRQ);
+#+end_src

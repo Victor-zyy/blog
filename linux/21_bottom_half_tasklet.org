@@ -1,0 +1,157 @@
+* Tasklet
+Tasklet can be run in parallel, the mechanism is that we use this task later, can only be run on a specific cpu not on multiple cpu, in order to cache-friendly. 
+And also, each queued tasklet must be run after the former tasklet. So the process of tasklet is atomic.
+In short, a tasklet in linux is something like a very small thread that has neither stack nor context of its own. Such “threads” work quickly and completely. 
+
+** Note of tasklet
+- Tasklets are atomic, so we cannot use sleep() and such synchronization primitives as mutexes, semaphores, etc. from them. But we can use spinlock.
+- A tasklet only runs on the same core (CPU) that schedules it.
+- Different tasklets can be running in parallel. But at the same time, a tasklet cannot be called concurrently with itself, as it runs on one CPU only.
+- Tasklets are executed by the principle of non-preemptive scheduling, one by one, in turn. We can schedule them with two different priorities: normal and high.
+** tasklet struct
+defined in include/linux/interrupt.h
+#+begin_src c
+struct tasklet_struct
+{
+	struct tasklet_struct *next;
+	unsigned long state;
+	atomic_t count;
+	bool use_callback;
+	union {
+		void (*func)(unsigned long data);
+		void (*callback)(struct tasklet_struct *t);
+	};
+	unsigned long data;
+};
+#+end_src
+next – The next tasklet in line for scheduling.
+state – This state denotes Tasklet’s State. *TASKLET_STATE_SCHED* (Scheduled) or *TASKLET_STATE_RUN* (Running).
+count – It holds a nonzero value if the tasklet is disabled and 0 if it is enabled.
+func –  This is the main function of the tasklet. Pointer to the function that needs to schedule for execution at a later time.
+data –  Data to be passed to the function “func“.
+** create tasklet
+#+begin_src c
+#define DECLARE_TASKLET(name, _callback)		\
+struct tasklet_struct name = {				\
+	.count = ATOMIC_INIT(0),			\
+	.callback = _callback,				\
+	.use_callback = true,				\
+}
+#+end_src
+#+begin_src c
+#define DECLARE_TASKLET_OLD(name, _func)		\
+struct tasklet_struct name = {				\
+	.count = ATOMIC_INIT(0),			\
+	.func = _func,					\
+}
+#+end_src
+
+** init tasklet
+This function is dynamically method of create tasklet
+defined in kernel/softiq.c
+#+begin_src c
+void tasklet_init(struct tasklet_struct *t,
+		  void (*func)(unsigned long), unsigned long data)
+{
+	t->next = NULL;
+	t->state = 0;
+	atomic_set(&t->count, 0);
+	t->func = func;
+	t->use_callback = false;
+	t->data = data;
+}
+EXPORT_SYMBOL(tasklet_init);
+#+end_src
+** enable tasklet
+defined in include/linux/interrupt.h
+#+begin_src c
+static inline void tasklet_enable(struct tasklet_struct *t)
+{
+	smp_mb__before_atomic();
+	atomic_dec(&t->count);
+}
+#+end_src
+** disable tasklet
+This is used to disable the tasklet wait for the completion of the tasklet’s operation.
+#+begin_src c
+static inline void tasklet_disable(struct tasklet_struct *t)
+{
+	tasklet_disable_nosync(t);
+	tasklet_unlock_wait(t);
+	smp_mb();
+}
+#+end_src
+** diable tasklet sync
+This is used to disable immediately.
+#+begin_src c
+static inline void tasklet_disable_nosync(struct tasklet_struct *t)
+{
+	atomic_inc(&t->count);
+	smp_mb__after_atomic();
+}
+#+end_src
+
+** schedule tasklet
+Each cpu has its own queue for scheduling, and we have two priorities like normal and high. Let one tasklet to schedule is just to place the tasklet into one of the two queues.
+*** normal priority
+#+begin_src c
+static inline void tasklet_schedule(struct tasklet_struct *t)
+#+end_src
+*** high priority
+#+begin_src c
+static inline void tasklet_hi_schedule(struct tasklet_struct *t)
+#+end_src
+
+** kill tasklet
+This will wait for its completion and then kill it.
+#+begin_src c
+void tasklet_kill(struct tasklet_struct *t)
+{
+	if (in_interrupt())
+		pr_notice("Attempt to kill tasklet from interrupt\n");
+
+	while (test_and_set_bit(TASKLET_STATE_SCHED, &t->state))
+		wait_var_event(&t->state, !test_bit(TASKLET_STATE_SCHED, &t->state));
+
+	tasklet_unlock_wait(t);
+	tasklet_clear_sched(t);
+}
+EXPORT_SYMBOL(tasklet_kill);
+#+end_src
+
+
+* Template
+#+begin_src c
+  
+#define IRQ_NO 11
+ 
+void tasklet_fn(unsigned long); 
+
+/* Tasklet by Dynamic Method */
+struct tasklet_struct *tasklet = NULL;
+ 
+ 
+/*Tasklet Function*/
+void tasklet_fn(unsigned long arg)
+{
+        printk(KERN_INFO "Executing Tasklet Function : arg = %ld\n", arg);
+}
+ 
+ 
+//Interrupt handler for IRQ 11. 
+static irqreturn_t irq_handler(int irq,void *dev_id) {
+        printk(KERN_INFO "Shared IRQ: Interrupt Occurred");
+        /*Scheduling Task to Tasklet*/
+        tasklet_schedule(tasklet); 
+        
+        return IRQ_HANDLED;
+}
+      // init_etx function to init this struct
+        /* Init the tasklet bt Dynamic Method */
+        tasklet  = kmalloc(sizeof(struct tasklet_struct),GFP_KERNEL);
+        if(tasklet == NULL) {
+            printk(KERN_INFO "etx_device: cannot allocate Memory");
+            goto irq;
+        }
+        tasklet_init(tasklet,tasklet_fn,0);
+#+end_src

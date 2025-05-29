@@ -1,0 +1,144 @@
+* Epoll
+epoll is an event poll and a variant of poll. It can be used either as an Edge or Level Triggered interface and scales well to large numbers of watched file descriptors.
+
+Edge triggered: a call to epoll_wait will return only when a new event is enqueued with the epoll.
+
+Level triggered: a call to epoll_wait will return as long as the condition holds
+
+** user layer usage
+*** epoll_create
+#+begin_src c
+#include <sys/epoll.h>
+
+int epoll_create(int size);
+int epoll_create1(int flags);
+
+DESCRIPTION
+    epoll_create() creates a new epoll(7) instance.  Since Linux 2.6.8, the size
+    argument is ignored, but must be greater than zero; see NOTES.
+
+    epoll_create() returns a file descriptor referring  to  the  new  epoll  in‐
+    stance.   This  file  descriptor is used for all the subsequent calls to the
+    epoll interface.  When no longer required, the file descriptor  returned  by
+    epoll_create()  should  be closed by using close(2).  When all file descrip‐
+    tors referring to an epoll instance have been closed,  the  kernel  destroys
+    the instance and releases the associated resources for reuse.
+#+end_src
+*** epoll_ctl
+#+begin_src c
+int epoll_ctl(int epfd, int op, int fd, struct epoll_event *event);
+
+#+end_src
+*** epoll_wait
+#+begin_src c
+int epoll_wait(int epfd, struct epoll_event *events,
+                      int maxevents, int timeout);
+int epoll_pwait(int epfd, struct epoll_event *events,
+                      int maxevents, int timeout,
+                      const sigset_t *sigmask);
+#+end_src
+*** epoll_data/event
+#+begin_src c
+  typedef union epoll_data {
+    void        *ptr;
+    int          fd;
+    uint32_t     u32;
+    uint64_t     u64;
+  } epoll_data_t;
+
+  struct epoll_event {
+    uint32_t     events;      /* Epoll events */
+    epoll_data_t data;        /* User data variable */
+  };
+#+end_src
+
+* Template
+#+begin_src c
+#include <assert.h>
+#include <fcntl.h>
+#include <sys/epoll.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+
+#define EPOLL_SIZE ( 256 )
+#define MAX_EVENTS (  20 )
+
+int main()
+{
+char kernel_val[20];
+int fd, epoll_fd, ret, n;
+struct epoll_event ev,events[20];
+
+fd = open("/dev/etx_device", O_RDWR | O_NONBLOCK);
+
+if( fd == -1 )  
+{
+perror("open");
+exit(EXIT_FAILURE);
+}
+
+//Create epoll instance
+epoll_fd = epoll_create(EPOLL_SIZE);
+
+if( epoll_fd < 0 )  
+{
+perror("epoll_create");
+exit(EXIT_FAILURE);
+}
+
+ev.data.fd = fd;
+ev.events  = ( EPOLLIN | EPOLLOUT );
+
+//Add the fd to the epoll
+if( epoll_ctl( epoll_fd, EPOLL_CTL_ADD, fd, &ev ) )
+{
+perror("Failed to add file descriptor to epoll\n");
+close(epoll_fd);
+exit(EXIT_FAILURE);
+}
+
+while( 1 ) 
+{
+puts("Starting epoll...");
+
+ret = epoll_wait( epoll_fd, events, MAX_EVENTS, 5000);;   //wait for 5secs
+
+if( ret < 0 ) 
+{
+    perror("epoll_wait");
+    close(epoll_fd);
+    assert(0);
+}
+
+for( n=0; n<ret; n++ )
+{    
+    if( ( events[n].events & EPOLLIN )  == EPOLLIN )
+    {
+    read(events[n].data.fd, &kernel_val, sizeof(kernel_val));
+    printf("EPOLLIN : Kernel_val = %s\n", kernel_val);
+    }
+
+    if( ( events[n].events & EPOLLOUT )  == EPOLLOUT )
+    {
+    strcpy( kernel_val, "User Space");
+    write(events[n].data.fd, &kernel_val, strlen(kernel_val));
+    printf("EPOLLOUT : Kernel_val = %s\n", kernel_val);
+    }
+}
+}
+
+if(close(epoll_fd))
+{
+perror("Failed to close epoll file descriptor\n");
+}
+
+if(close(fd))
+{
+perror("Failed to close file descriptor\n");
+}
+
+return 0;
+}
+#+end_src

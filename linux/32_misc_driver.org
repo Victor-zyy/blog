@@ -1,0 +1,193 @@
+* Misc Device Driver
+ “Misc Device Drivers,” a versatile category designed for handling those devices that don’t neatly fit into predefined molds. These drivers simplify the process, offering a fixed major number and automated device node creation.
+
+This means that if you don’t want to use the major number, then you can write this misc driver. Also, if you want to write a simple driver, then you can choose a misc driver instead of choosing a character driver.
+
+So, you cannot choose the major number yourself when you write the misc driver. The default major number of all the misc drivers is 10. But you can choose your minor numbers between 1 to 255. It has all the file operation calls like open, read, write, close, and IOCTL.
+#+begin_src c
+zyy@ubuntu:cat /proc/devices 
+Character devices:
+  1 mem
+  4 /dev/vc/0
+  4 tty
+  4 ttyS
+  5 /dev/tty
+  5 /dev/console
+  5 /dev/ptmx
+  5 ttyprintk
+  6 lp
+  7 vcs
+ 10 misc
+
+#+end_src
+
+** difference of chardev and misc
+
+1. In misc driver, the major number will be 10 and the minor number is user-convenient. Whereas, in character drivers, the user can select their own major and minor number if it is available.
+2. The device node or device file will be automatically generated in misc drivers. Whereas, in character drivers, the user has to create the device node or device file using cdev_init, cdev_add, class_create, and device_create.
+** usage
+
+1. If you write character drivers for simple devices, you have to create a major number as well. In such a case, the kernel has to keep that details in the static table. This means you end up wasting the RAM for simple devices. If you write multiple character drivers for multiple simple devices, then the RAM wastage also increases. To avoid this you can use the misc driver. Because, in the misc driver, you don’t need to specify the major number since it has a fixed major number which is 10.
+2.If you use misc drivers, it will automatically create the device file compared to the character driver.
+
+** miscdevice structure
+defined in include/linux/miscdevice.h file.
+#+begin_src c
+struct miscdevice  {
+	int minor;
+	const char *name;
+	const struct file_operations *fops;
+	struct list_head list;
+	struct device *parent;
+	struct device *this_device;
+	const struct attribute_group **groups;
+	const char *nodename;
+	umode_t mode;
+};
+#+end_src
+
+
+** register
+defined in /drivers/char/misc.c file.
+#+begin_src c
+/**
+ *	misc_register	-	register a miscellaneous device
+ *	@misc: device structure
+ *
+ *	Register a miscellaneous device with the kernel. If the minor
+ *	number is set to %MISC_DYNAMIC_MINOR a minor number is assigned
+ *	and placed in the minor field of the structure. For other cases
+ *	the minor number requested is used.
+ *
+ *	The structure passed is linked into the kernel and may not be
+ *	destroyed until it has been unregistered. By default, an open()
+ *	syscall to the device sets file->private_data to point to the
+ *	structure. Drivers don't need open in fops for this.
+ *
+ *	A zero is returned on success and a negative errno code for
+ *	failure.
+ */
+
+int misc_register(struct miscdevice *misc)
+#+end_src
+
+** deregister
+#+begin_src c
+/**
+ *	misc_deregister - unregister a miscellaneous device
+ *	@misc: device to unregister
+ *
+ *	Unregister a miscellaneous device that was previously
+ *	successfully registered with misc_register().
+ */
+
+void misc_deregister(struct miscdevice *misc)
+#+end_src
+
+* Template
+#+begin_src c
+  
+#include <linux/miscdevice.h>
+#include <linux/fs.h>
+#include <linux/kernel.h>
+#include <linux/module.h>
+#include <linux/init.h>
+
+/*
+**This function will be called when we open the Misc device file
+*/
+static int etx_misc_open(struct inode *inode, struct file *file)
+{
+    pr_info("EtX misc device open\n");
+    return 0;
+}
+
+/*
+**This function will be called when we close the Misc Device file
+*/
+static int etx_misc_close(struct inode *inodep, struct file *filp)
+{
+    pr_info("EtX misc device close\n");
+    return 0;
+}
+
+/*
+**This function will be called when we write the Misc Device file
+*/
+static ssize_t etx_misc_write(struct file *file, const char __user *buf,
+               size_t len, loff_t *ppos)
+{
+    pr_info("EtX misc device write\n");
+    
+    /* We are not doing anything with this data now */
+    
+    return len; 
+}
+ 
+/*
+**This function will be called when we read the Misc Device file
+*/
+static ssize_t etx_misc_read(struct file *filp, char __user *buf,
+                    size_t count, loff_t *f_pos)
+{
+    pr_info("EtX misc device read\n");
+ 
+    return 0;
+}
+
+//File operation structure 
+static const struct file_operations fops = {
+    .owner          = THIS_MODULE,
+    .write          = etx_misc_write,
+    .read           = etx_misc_read,
+    .open           = etx_misc_open,
+    .release        = etx_misc_close,
+    .llseek         = no_llseek,
+};
+
+//Misc device structure
+struct miscdevice etx_misc_device = {
+    .minor = MISC_DYNAMIC_MINOR,
+    .name = "simple_etx_misc",
+    .fops = &fops,
+};
+
+/*
+**Misc Init function
+*/
+static int __init misc_init(void)
+{
+    int error;
+ 
+    error = misc_register(&etx_misc_device);
+    if (error) {
+        pr_err("misc_register failed!!!\n");
+        return error;
+    }
+ 
+    pr_info("misc_register init done!!!\n");
+    return 0;
+}
+
+/*
+**Misc exit function
+*/
+static void __exit misc_exit(void)
+{
+    misc_deregister(&etx_misc_device);
+    pr_info("misc_register exit done!!!\n");
+}
+ 
+module_init(misc_init)
+module_exit(misc_exit)
+#+end_src
+
+#+begin_src sh
+~ # modprobe driver-misc
+[   20.222723] driver_misc: loading out-of-tree module taints kernel.
+[   20.246914] misc_register init done!!!
+~ # ls /dev/simple_etx_misc 
+/dev/simple_etx_misc
+~ # 
+#+end_src
+

@@ -1,0 +1,80 @@
+* Sending Signals
+Signals are one of the oldest inter-process communication methods. These signals are asynchronous. Sending signals from driver to user space.
+
+** steps sending signals to user space
+1. decide which signal you wanna send
+2. register the user space application with the driver
+3. once something happened, send signals to userspace.
+4. unregister the user space application when u have done all of it.
+   
+** decide which signal
+#+begin_src c
+#define SIGETX    44
+#+end_src
+** register user application
+Actually we need the PID of the process and then the driver will use this PID to send signals. You can register the application PID in anyways like IOCTL, Open/read/write call. 
+#+begin_src c
+static long etx_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
+{
+    if (cmd == REG_CURRENT_TASK) {
+        printk(KERN_INFO "REG_CURRENT_TASK\n");
+        task = get_current();
+        signum = SIGETX;
+    }
+    return 0;
+}
+#+end_src
+** when to send signals
+#+begin_src c
+  //Interrupt handler for IRQ 11. 
+static irqreturn_t irq_handler(int irq,void *dev_id) {
+    struct siginfo info;
+    printk(KERN_INFO "Shared IRQ: Interrupt Occurred");
+    
+    //Sending signal to app
+    memset(&info, 0, sizeof(struct siginfo));
+    info.si_signo = SIGETX;
+    info.si_code = SI_QUEUE;
+    info.si_int = 1;
+
+    if (task != NULL) {
+        printk(KERN_INFO "Sending signal to app\n");
+        if(send_sig_info(SIGETX, &info, task) < 0) {
+            printk(KERN_INFO "Unable to send signal\n");
+        }
+    }
+    return IRQ_HANDLED;
+}
+#+end_src
+** unregister
+#+begin_src c
+static int etx_release(struct inode *inode, struct file *file)
+{
+    struct task_struct *ref_task = get_current();
+    printk(KERN_INFO "Device File Closed...!!!\n");
+    
+    //delete the task
+    if(ref_task == task) {
+        task = NULL;
+    }
+    return 0;
+}
+#+end_src
+
+* Template
+In user application, we have to registered the SIGETX signal, and handler to process data.
+#+begin_src c
+    struct sigaction act;
+ 
+    /* install ctrl-c interrupt handler to cleanup at exit */
+    sigemptyset (&act.sa_mask);
+    act.sa_flags = (SA_SIGINFO | SA_RESETHAND);
+    act.sa_sigaction = ctrl_c_handler;
+    sigaction (SIGINT, &act, NULL);
+ 
+    /* install custom signal handler */
+    sigemptyset(&act.sa_mask);
+    act.sa_flags = (SA_SIGINFO | SA_RESTART);
+    act.sa_sigaction = sig_event_handler;
+    sigaction(SIGETX, &act, NULL);
+#+end_src

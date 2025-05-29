@@ -1,0 +1,225 @@
+* Mutex
+
+** scene
+    You have one SPI connection. What if one thread wants to write something into that SPI device and another thread wants to read from that SPI device at the same time?
+    You have one LED display. What if one thread is writing data at a different position of Display and another thread is writing different data at a different position of Display at the same time?
+    You have one Linked List. What if one thread wants to insert something into the list and another one wants to delete something on the same Linked List at the same time?
+
+At any given point two threads are accessing a single resource. Now we will relate the above scenarios to our car example.
+These are termed race-conditions.
+
+** race-condition
+A race condition occurs when two or more threads can access shared data and they try to change it at the same time. Because the thread scheduling algorithm can swap between threads at any time, we don’t know the order in which the threads will attempt to access the shared data.
+
+Therefore, the result of the change in data is dependent on the thread scheduling algorithm, i.e. both threads are “racing” to access/change the data.
+
+To avoid race conditions, we have many ways like *Semaphore*, *Spinlock*, and *Mutex*. In this tutorial, we will concentrate on Mutex.
+
+** mutex
+It is a mutual lock which only one thread can access this lock, if one thread gets this lock, then it must unlock it after executing some codes.
+
+#+begin_src c
+struct mutex {
+	atomic_long_t		owner;
+	raw_spinlock_t		wait_lock;
+#ifdef CONFIG_MUTEX_SPIN_ON_OWNER
+	struct optimistic_spin_queue osq; /* Spinner MCS lock */
+#endif
+	struct list_head	wait_list;
+#ifdef CONFIG_DEBUG_MUTEXES
+	void			*magic;
+#endif
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	struct lockdep_map	dep_map;
+#endif
+};
+#+end_src
+
+** init mutex
+#+begin_src c
+#define DEFINE_MUTEX(mutexname) \
+	struct mutex mutexname = __MUTEX_INITIALIZER(mutexname)
+
+extern void __mutex_init(struct mutex *lock, const char *name,
+			 struct lock_class_key *key);
+/**
+ * mutex_init - initialize the mutex
+ * @mutex: the mutex to be initialized
+ *
+ * Initialize the mutex to unlocked state.
+ *
+ * It is not allowed to initialize an already locked mutex.
+ */
+#define mutex_init(mutex)						\
+do {									\
+	static struct lock_class_key __key;				\
+									\
+	__mutex_init((mutex), #mutex, &__key);				\
+} while (0)
+#+end_src
+
+** mutex lock/acquire
+*** mutex_lock
+#+begin_src c
+/**
+ * mutex_lock - acquire the mutex
+ * @lock: the mutex to be acquired
+ *
+ * Lock the mutex exclusively for this task. If the mutex is not
+ * available right now, it will sleep until it can get it.
+ *
+ * The mutex must later on be released by the same task that
+ * acquired it. Recursive locking is not allowed. The task
+ * may not exit without first unlocking the mutex. Also, kernel
+ * memory where the mutex resides must not be freed with
+ * the mutex still locked. The mutex must first be initialized
+ * (or statically defined) before it can be locked. memset()-ing
+ * the mutex to 0 is not allowed.
+ *
+ * (The CONFIG_DEBUG_MUTEXES .config option turns on debugging
+ * checks that will enforce the restrictions and will also do
+ * deadlock debugging)
+ *
+ * This function is similar to (but not equivalent to) down().
+ */
+void __sched mutex_lock(struct mutex *lock)
+{
+	might_sleep();
+
+	if (!__mutex_trylock_fast(lock))
+		__mutex_lock_slowpath(lock);
+}
+EXPORT_SYMBOL(mutex_lock);
+#+end_src
+*** mutex_lock_interruptible
+#+begin_src c
+/**
+ * mutex_lock_interruptible() - Acquire the mutex, interruptible by signals.
+ * @lock: The mutex to be acquired.
+ *
+ * Lock the mutex like mutex_lock().  If a signal is delivered while the
+ * process is sleeping, this function will return without acquiring the
+ * mutex.
+ *
+ * Context: Process context.
+ * Return: 0 if the lock was successfully acquired or %-EINTR if a
+ * signal arrived.
+ */
+int __sched mutex_lock_interruptible(struct mutex *lock)
+{
+	might_sleep();
+
+	if (__mutex_trylock_fast(lock))
+		return 0;
+
+	return __mutex_lock_interruptible_slowpath(lock);
+}
+
+EXPORT_SYMBOL(mutex_lock_interruptible);
+#+end_src
+*** mutex_trylock
+#+begin_src c
+/**
+ * mutex_trylock - try to acquire the mutex, without waiting
+ * @lock: the mutex to be acquired
+ *
+ * Try to acquire the mutex atomically. Returns 1 if the mutex
+ * has been acquired successfully, and 0 on contention.
+ *
+ * NOTE: this function follows the spin_trylock() convention, so
+ * it is negated from the down_trylock() return values! Be careful
+ * about this when converting semaphore users to mutexes.
+ *
+ * This function must not be used in interrupt context. The
+ * mutex must be released by the same task that acquired it.
+ */
+int __sched mutex_trylock(struct mutex *lock)
+{
+	bool locked;
+
+	MUTEX_WARN_ON(lock->magic != lock);
+
+	locked = __mutex_trylock(lock);
+	if (locked)
+		mutex_acquire(&lock->dep_map, 0, 1, _RET_IP_);
+
+	return locked;
+}
+EXPORT_SYMBOL(mutex_trylock);
+#+end_src
+** mutex unlock
+#+begin_src c
+/**
+ * mutex_unlock - release the mutex
+ * @lock: the mutex to be released
+ *
+ * Unlock a mutex that has been locked by this task previously.
+ *
+ * This function must not be used in interrupt context. Unlocking
+ * of a not locked mutex is not allowed.
+ *
+ * This function is similar to (but not equivalent to) up().
+ */
+void __sched mutex_unlock(struct mutex *lock)
+#+end_src
+** mutex_status
+#+begin_src c
+bool mutex_is_locked(struct mutex *lock)
+{
+	return __mutex_owner(lock) != NULL;
+}
+#+end_src
+* Template
+#+begin_src c
+  
+/*
+**Thread function 1
+*/
+int thread_function1(void *pv)
+{
+    
+    while(!kthread_should_stop()) {
+        mutex_lock(&etx_mutex);
+        etx_global_variable++;
+        pr_info("In EmbeTronicX Thread Function1 %lu\n", etx_global_variable);
+        mutex_unlock(&etx_mutex);
+        msleep(1000);
+    }
+    return 0;
+}
+
+/*
+**Thread function 2
+*/
+int thread_function2(void *pv)
+{
+    while(!kthread_should_stop()) {
+        mutex_lock(&etx_mutex);
+        etx_global_variable++;
+        pr_info("In EmbeTronicX Thread Function2 %lu\n", etx_global_variable);
+        mutex_unlock(&etx_mutex);
+        msleep(1000);
+    }
+    return 0;
+}
+        mutex_init(&etx_mutex);
+        
+        /* Creating Thread 1 */
+        etx_thread1 = kthread_run(thread_function1,NULL,"eTx Thread1");
+        if(etx_thread1) {
+            pr_err("Kthread1 Created Successfully...\n");
+        } else {
+            pr_err("Cannot create kthread1\n");
+             goto r_device;
+        }
+ 
+         /* Creating Thread 2 */
+        etx_thread2 = kthread_run(thread_function2,NULL,"eTx Thread2");
+        if(etx_thread2) {
+            pr_err("Kthread2 Created Successfully...\n");
+        } else {
+            pr_err("Cannot create kthread2\n");
+             goto r_device;
+        }
+#+end_src
+

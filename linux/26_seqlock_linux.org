@@ -1,0 +1,145 @@
+* SeqLock
+
+Likewise, is there any mechanism that gives importance to writers? Yeah, it is there in Linux. Seqlock is the one that gives importance to writers. We’ll continue to see about seqlock.
+Seqlock is a short form of sequential lock. It is a reader-writer consistent mechanism which is giving importance to the writer. So this avoids the problem of writer starvation. 
+
+** mechanism of seqlock
+
+1. When no one is in a critical section then one writer can enter into a critical section by acquiring its lock. Once it took its lock then the writer will increment the sequence number by one. Currently, the sequence number is an odd value. Once done with the writing, again it will increment the sequence number by one. Now the number is an even value. So, when the sequence number is an odd value, writing is happening. When the sequence number is an even value, writing has been done. Only one writer thread will be allowed in the critical section. So other writers will be waiting for the lock.
+2. When the reader wants to read the data, first it will read the sequence number. If it is an even value, then it will go to a critical section and reads the data. If it is an odd value (the writer is writing something), the reader will wait for the writer to finish (the sequence number becomes an even number). The value of the sequence number while entering into the critical section is called an old sequence number.
+3. After reading the data, again it will check the sequence number. If it is equal to the old sequence number, then everything is okay. Otherwise, it will repeat step 2 again. In this case, readers simply retry (using a loop) until they read the same even sequence number before and after. The reader never blocks, but it may have to retry if a write is in progress.
+4. When only the reader is reading the data and no writer is in the critical section, any time one writer can enter into a critical section by taking lock without blocking. This means the writer cannot be blocked for the reader and the reader has to re-read the data when the writer is writing. This means seqlock is giving importance to a writer, not the reader (the reader may have to wait but not the writer).
+
+
+** when to use
+
+1. where read operations are more frequent than write.
+2. where write access is rare but must be fast.
+3. That data is simple (no pointers) that needs to be protected. Seqlocks generally cannot be used to protect data structures involving pointers, because the reader may be following a pointer that is invalid while the writer is changing the data structure.
+
+** init seqlock
+defined in include/linux/seqlock.h file.
+#+begin_src c
+/**
+ * seqlock_init() - dynamic initializer for seqlock_t
+ * @sl: Pointer to the seqlock_t instance
+ */
+#define seqlock_init(sl)						\
+	do {								\
+		spin_lock_init(&(sl)->lock);				\
+		seqcount_spinlock_init(&(sl)->seqcount, &(sl)->lock);	\
+	} while (0)
+
+/**
+ * DEFINE_SEQLOCK(sl) - Define a statically allocated seqlock_t
+ * @sl: Name of the seqlock_t instance
+ */
+#define DEFINE_SEQLOCK(sl) \
+		seqlock_t sl = __SEQLOCK_UNLOCKED(sl)
+
+#+end_src
+** write operations
+*** write lock
+#+begin_src c
+void write_seqlock(seqlock_t *lock);
+#+end_src
+ write_seqlock opens a write side critical section for the given seqlock_t.  It also implicitly acquires the spinlock_t embedded inside that sequential lock. All seqlock_t write side sections are thus  automatically serialized and non-preemptible.
+#+begin_src c
+int write_tryseqlock(seqlock_t *lock);  // not found in linux kernel 5.15.175
+void write_seqlock_irqsave(seqlock_t *lock, long flags);
+void write_seqlock_bh(seqlock_t *sl); // try to write from the bottom halves you can use this call
+void write_seqlock_irq(seqlock_t *lock);
+#+end_src
+*** write unlock
+#+begin_src c
+void write_sequnlock(seqlock_t *lock);
+void write_sequnlock_irqrestore(seqlock_t *lock, long flags);
+void write_sequnlock_irq(seqlock_t *lock);
+void write_sequnlock_bh(seqlock_t *lock);
+#+end_src
+** read operations
+*** sequence of read
+1. Begin the read and get the initial sequence number.
+2. Read the data.
+3. Once the reading is done, compare the current sequence number with an initial sequence number. If the current sequence number is an odd value or the current sequence number is not matching with the initial sequence number means writing is going on. So the reader has to retry, which means the reader has to again go to step 1 and do the process again.
+
+*** read api
+#+begin_src c
+unsigned int read_seqbegin(seqlock_t *lock);
+#+end_src
+ This function will read and return the sequence number. 
+#+begin_src c
+unsigned int read_seqbegin_irqsave(seqlock_t *lock, long flags);
+#+end_src
+
+*** compare
+#+begin_src c
+int read_seqretry(seqlock_t *lock, unsigned int seq_no);
+int read_seqretry_irqrestore(seqlock_t *lock, unsigned int seq_no, long flags);
+#+end_src
+This API will compare the current sequence number with the provided sequence number (argument 2). If the current sequence number is an odd value or the current sequence number is not matching with the initial sequence number (argument 2) means writing is going on. So it will return 1. Otherwise, it will return 0.
+
+*** example read
+#+begin_src c
+unsigned int seq_no;
+do {
+    seq_no = read_seqbegin(&lock);
+    /* Read the data */
+} while ( read_seqretry(&lock, seq_no) );
+#+end_src
+
+* Template
+#+begin_src c
+  //Thread used for writing
+  int thread_function1(void *pv)
+  {
+      while(!kthread_should_stop()) {  
+          write_seqlock(&etx_seq_lock);
+          etx_global_variable++;
+          write_sequnlock(&etx_seq_lock);
+          msleep(1000);
+      }
+      return 0;
+  }
+   
+  //Thread used for reading
+  int thread_function2(void *pv)
+  {
+      unsigned int seq_no;
+      unsigned long read_value;
+      while(!kthread_should_stop()) {
+          do {
+              seq_no = read_seqbegin(&etx_seq_lock);
+          read_value = etx_global_variable;
+      } while (read_seqretry(&etx_seq_lock, seq_no));
+          pr_info("In EmbeTronicX Thread Function2 : Read value %lu\n", read_value);
+          msleep(1000);
+      }
+      return 0;
+  }
+
+        //Initialize the seqlock
+        seqlock_init(&etx_seq_lock);
+
+        /* Creating Thread 1 */
+        etx_thread1 = kthread_run(thread_function1,NULL,"eTx Thread1");
+        if(etx_thread1) {
+            pr_err("Kthread1 Created Successfully...\n");
+        } else {
+            pr_err("Cannot create kthread1\n");
+             goto r_device;
+        }
+
+         /* Creating Thread 2 */
+        etx_thread2 = kthread_run(thread_function2,NULL,"eTx Thread2");
+        if(etx_thread2) {
+            pr_err("Kthread2 Created Successfully...\n");
+        } else {
+            pr_err("Cannot create kthread2\n");
+             goto r_device;
+        }
+
+        
+        pr_info("Device Driver Insert...Done!!!\n");
+        return 0;
+#+end_src

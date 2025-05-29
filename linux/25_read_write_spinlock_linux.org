@@ -1,0 +1,165 @@
+* Write-Read Spinlock
+Okay, now we will take one scenario. I have five threads. All those threads are accessing one global variable. So we can use spinlock over there. Am I right? Well, yes it’s right.  In those threads, thread-1’s role is to write the data into that variable. The other four thread’s roles are simply reading the data from that variable. This the case. I hope you guys understand the scenario. Now I can ask you guys a question. If you implement spinlock,
+
+Why spinlock is enough? Like why we need a write-read spinlock? Which in my opinion, the granularity of spinlock is large, we need a litter spinlock to implement some scenarios to make the system run more efficiently.
+
+** mechanism of rwlock
+1.When there is no thread in the critical section, any reader or writer thread can enter into a critical section by taking respective read or write lock. But only one thread can enter into a critical section.
+
+2. If the reader thread is in the critical section, the new reader thread can enter arbitrarily, but the writer thread cannot enter. The writer thread has to wait until all the reader thread finishes their process.
+3. If the writer thread is in the critical section, no reader thread or writer thread can enter.
+4. If one or more reader threads are in the critical section by taking its lock, the writer thread can of course not enter the critical section, but the writer thread cannot prevent the entry of the subsequent read thread. He has to wait until the critical section has a reader thread. So this read-write spinlock is giving importance to the reader thread and not the writer thread. If you want to give importance to the writer thread than the reader thread, then another lock is available in Linux which is *seqlock*.
+
+** where to use rwlock
+
+- If you are only reading the data then you take read lock
+- If you are writing then go for a write lock
+
+ Read-Write locks are more useful in scenarios where the architecture is clearly divided into the reader and the writers, with more number of reads.
+
+ In Read Write spinlock multiple readers are permitted at the same time but only one writer. (i.e) If a writer has the lock, no reader is allowed to enter the critical section. If only a reader has the lock, then multiple readers are permitted in the critical section.
+
+** rwlock structure
+defined in include/linux/rwlock_types.h
+#+begin_src c
+/*
+ * generic rwlock type definitions and initializers
+ *
+ * portions Copyright 2005, Red Hat, Inc., Ingo Molnar
+ * Released under the General Public License (GPL).
+ */
+typedef struct {
+	arch_rwlock_t raw_lock;
+#ifdef CONFIG_DEBUG_SPINLOCK
+	unsigned int magic, owner_cpu;
+	void *owner;
+#endif
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+	struct lockdep_map dep_map;
+#endif
+} rwlock_t;
+#+end_src
+
+** rwlock_init
+#+begin_src c
+#define DEFINE_RWLOCK(x)	rwlock_t x = __RW_LOCK_UNLOCKED(x)
+
+#define DEFINE_RWLOCK(name)						\
+    rwlock_t name = __RW_LOCK_UNLOCKED(name)
+
+#ifdef CONFIG_DEBUG_SPINLOCK
+extern void __rwlock_init(rwlock_t *lock, const char *name,
+                        struct lock_class_key *key);
+# define rwlock_init(lock)					\
+do {								\
+    static struct lock_class_key __key;			\
+                                                            \
+    __rwlock_init((lock), #lock, &__key);			\
+} while (0)
+#else
+# define rwlock_init(lock)					\
+    do { *(lock) = __RW_LOCK_UNLOCKED(lock); } while (0)
+#endif
+#+end_src
+
+** normal lock/unlock functions
+#+begin_src c
+  read_lock(rwlock_t *lock)
+  read_unlock(rwlock_t *lock)
+  write_lock(rwlock_t *lock)
+  write_unlock(rwlock_t *lock)
+#+end_src
+** approaches
+*** approach1 two user context
+Use normal functions of lock/unlock
+#+begin_src c
+  //Thread 1
+int thread_function1(void *pv)
+{
+    while(!kthread_should_stop()) {  
+        write_lock(&etx_rwlock);
+        etx_global_variable++;
+        write_unlock(&etx_rwlock);
+        msleep(1000);
+    }
+    return 0;
+}
+
+//Thread 2
+int thread_function2(void *pv)
+{
+    while(!kthread_should_stop()) {
+        read_lock(&etx_rwlock);
+        printk(KERN_INFO "In EmbeTronicX Thread Function2 : Read value %lu\n", etx_global_variable);
+        read_unlock(&etx_rwlock);
+        msleep(1000);
+    }
+    return 0;
+#+end_src
+*** approach2
+Locking between Bottom Halves, use appraoch1.
+*** approach3
+Locking between User context and Bottom Halves.
+#+begin_src c
+read_lock_bh(rwlock_t *lock)
+read_unlock_bh(rwlock_t *lock)
+write_lock_bh(rwlock_t *lock)
+write_unlock_bh(rwlock_t *lock)
+#+end_src
+
+#+begin_src c
+  //Thread
+int thread_function(void *pv)
+{
+    while(!kthread_should_stop()) {  
+        write_lock_bh(&etx_rwlock);
+        etx_global_variable++;
+        write_unlock_bh(&etx_rwlock);
+        msleep(1000);
+    }
+    return 0;
+}
+/*Tasklet Function*/
+void tasklet_fn(unsigned long arg)
+{
+        read_lock_bh(&etx_rwlock);
+        printk(KERN_INFO "Executing Tasklet Function : %lu\n", etx_global_variable);
+        read_unlock_bh(&etx_rwlock);
+}
+#+end_src
+*** approach4
+Locking between Hard IRQ and Bottom Halves.
+#+begin_src c
+read_lock_irq(rwlock_t *lock)
+read_unlock_irq(rwlock_t *lock)
+write_lock_irq(rwlock_t *lock)
+write_unlock_irq(rwlock_t *lock)
+#+end_src
+#+begin_src c
+  /*Tasklet Function*/
+void tasklet_fn(unsigned long arg)
+{
+        write_lock_irq(&etx_rwlock);
+        etx_global_variable++;
+        write_unlock_irq(&etx_rwlock);
+}
+ 
+//Interrupt handler for IRQ 11. 
+static irqreturn_t irq_handler(int irq,void *dev_id) {
+        read_lock_irq(&etx_rwlock); 
+        printk(KERN_INFO "Executing ISR Function : %lu\n", etx_global_variable);
+        read_unlock_irq(&etx_rwlock);
+        /*Scheduling Task to Tasklet*/
+        tasklet_schedule(tasklet); 
+        return IRQ_HANDLED;
+}
+#+end_src
+*** approach5
+Alternative of appraoch4
+#+begin_src c
+  read_lock_irqsave( rwlock_t *lock, unsigned long flags );
+  read_unlock_irqrestore( rwlock_t *lock, unsigned long flags );
+  write_lock_irqsave( rwlock_t *lock, unsigned long flags );
+  write_unlock_irqrestore( rwlock_t *lock, unsigned long flags );
+#+end_src
+

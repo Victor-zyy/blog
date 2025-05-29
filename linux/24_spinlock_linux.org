@@ -1,0 +1,231 @@
+* SpinLock
+If the kernel is running on a uniprocessor and CONFIG_SMP, CONFIG_PREEMPT aren’t enabled while compiling the kernel then spinlock will not be available. Because there is no reason to have a lock when no one else can run at the same time.
+
+But if you have disabled CONFIG_SMP and enabled  CONFIG_PREEMPT then spinlock will simply disable preemption, which is sufficient to prevent any races.
+
+** spinlock structure
+#+begin_src c
+// defined in include/linux/spinlock_types_raw.h
+typedef struct raw_spinlock {
+    arch_spinlock_t raw_lock;
+#ifdef CONFIG_DEBUG_SPINLOCK
+    unsigned int magic, owner_cpu;
+    void *owner;
+#endif
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+    struct lockdep_map dep_map;
+#endif
+} raw_spinlock_t;
+// defined in include/linux/spinlock_types.h
+#ifndef CONFIG_PREEMPT_RT
+
+/* Non PREEMPT_RT kernels map spinlock to raw_spinlock */
+typedef struct spinlock {
+    union {
+            struct raw_spinlock rlock;
+
+#ifdef CONFIG_DEBUG_LOCK_ALLOC
+# define LOCK_PADSIZE (offsetof(struct raw_spinlock, dep_map))
+            struct {
+                    u8 __padding[LOCK_PADSIZE];
+                    struct lockdep_map dep_map;
+            };
+#endif
+    };
+} spinlock_t;
+#+end_src
+Actually, the spin_lock is arch related, which means in riscv/arm/x86, there are different instructions to implement this spin_lock.
+** init spinlock
+#+begin_src c
+#define DEFINE_SPINLOCK(name)
+#+end_src
+
+defined in include/linux/spinlock.h
+#+begin_src c
+#ifdef CONFIG_DEBUG_SPINLOCK
+
+# define spin_lock_init(lock)					\
+do {								\
+	static struct lock_class_key __key;			\
+								\
+	__raw_spin_lock_init(spinlock_check(lock),		\
+			     #lock, &__key, LD_WAIT_CONFIG);	\
+} while (0)
+
+#else
+
+# define spin_lock_init(_lock)			\
+do {						\
+	spinlock_check(_lock);			\
+	*(_lock) = __SPIN_LOCK_UNLOCKED(_lock);	\
+} while (0)
+
+#endif
+#+end_src
+** spin_lock function
+*** spin_lock
+This will take the lock if it is free, otherwise, it’ll spin until that lock is free (Keep trying).
+#+begin_src c
+  spin_lock(spinlock_t *lock)
+#+end_src
+*** spin_trylock
+Locks the spinlock if it is not already locked. If unable to obtain the lock it exits with an error and does not spin. It returns non-zero if it obtains the lock otherwise returns zero.
+#+begin_src c
+  spin_trylock(spinlock_t *lock)
+#+end_src
+*** spin_unlock
+#+begin_src c
+  spin_unlock(spinlock_t *lock)
+#+end_src
+*** spin_is_locked
+#+begin_src c
+  spin_is_locked(spinlock_t *lock)
+#+end_src
+** approach
+After initializing the spinlock, there are several ways to use spinlock to lock or unlock, based on where the spinlock is used; either in user context or interrupt context. Let’s look at the approaches to these situations.
+
+*** appraoch1
+locking between user context, if you share data with user context (between two kthreads).
+#+begin_src c
+  //Thread 1
+int thread_function1(void *pv)
+{
+    while(!kthread_should_stop()) {
+        spin_lock(&etx_spinlock);
+        etx_global_variable++;
+        printk(KERN_INFO "In EmbeTronicX Thread Function1 %lu\n", etx_global_variable);
+        spin_unlock(&etx_spinlock);
+        msleep(1000);
+    }
+    return 0;
+}
+
+//Thread 2
+int thread_function2(void *pv)
+{   
+    while(!kthread_should_stop()) {
+        spin_lock(&etx_spinlock);
+        etx_global_variable++;
+        printk(KERN_INFO "In EmbeTronicX Thread Function2 %lu\n", etx_global_variable);
+        spin_unlock(&etx_spinlock);
+        msleep(1000);
+    }
+    return 0;
+#+end_src
+
+*** approach2
+Locking between two bottom halves.
+*** approach3
+Locking between bottom and user context.
+functions to use
+#+begin_src c
+  spin_lock_bh(spinlock_t *lock)
+  spin_unlock_bh(spinlock_t *lock)
+#+end_src
+These function disables the soft irq, and then grab that lock, it will prevent softirq ,tasklet, and bottom half to run on a local cpu.
+
+#+begin_src c
+  //Thread
+int thread_function(void *pv)
+{
+    while(!kthread_should_stop()) {
+        spin_lock_bh(&etx_spinlock);
+        etx_global_variable++;
+        printk(KERN_INFO "In EmbeTronicX Thread Function %lu\n", etx_global_variable);
+        spin_unlock_bh(&etx_spinlock);
+        msleep(1000);
+    }
+    return 0;
+}
+/*Tasklet Function*/
+void tasklet_fn(unsigned long arg)
+{
+        spin_lock_bh(&etx_spinlock);
+        etx_global_variable++;
+        printk(KERN_INFO "Executing Tasklet Function : %lu\n", etx_global_variable);
+        spin_unlock_bh(&etx_spinlock);
+}
+#+end_src
+
+*** approach4
+Locking between Hard IRQ and Bottom Halves
+#+begin_src c
+  spin_lock_irq(spinlock_t *lock)
+spin_unlock_irq(spinlock_t *lock)
+#+end_src
+These two functions will disable the hard irq and grab the lock, which will cause the Linux not preemptible or real-time concerned. That's why if we use CONFIG_PREEMPT the we won't use the spinlock.
+
+#+begin_src c
+  /*Tasklet Function*/
+void tasklet_fn(unsigned long arg)
+{
+        spin_lock_irq(&etx_spinlock);
+        etx_global_variable++;
+        printk(KERN_INFO "Executing Tasklet Function : %lu\n", etx_global_variable);
+        spin_unlock_irq(&etx_spinlock);
+}
+
+//Interrupt handler for IRQ 11. 
+static irqreturn_t irq_handler(int irq,void *dev_id) {
+        spin_lock_irq(&etx_spinlock); 
+        etx_global_variable++;
+        printk(KERN_INFO "Executing ISR Function : %lu\n", etx_global_variable);
+        spin_unlock_irq(&etx_spinlock);
+        /*Scheduling Task to Tasklet*/
+        tasklet_schedule(tasklet); 
+        return IRQ_HANDLED;
+}
+#+end_src
+
+*** approach5
+Alternative way of approach4.
+#+begin_src c
+  spin_lock_irqsave( spinlock_t *lock, unsigned long flags );
+  spin_unlock_irqrestore( spinlock_t *lock, unsigned long flags );
+#+end_src
+This will save whether interrupts were on or off in a flags word and grab the lock.
+*** approach6
+locking between two hard irqs. Use appraoch5.
+
+* Template
+
+#+begin_src c
+    
+DEFINE_SPINLOCK(etx_spinlock);
+//spinlock_t etx_spinlock;
+unsigned long etx_global_variable = 0;
+  
+int thread_function1(void *pv)
+{
+    
+    while(!kthread_should_stop()) {
+        if(!spin_is_locked(&etx_spinlock)) {
+            pr_info("Spinlock is not locked in Thread Function1\n");
+        }
+        spin_lock(&etx_spinlock);
+        if(spin_is_locked(&etx_spinlock)) {
+            pr_info("Spinlock is locked in Thread Function1\n");
+        }
+        etx_global_variable++;
+        pr_info("In EmbeTronicX Thread Function1 %lu\n", etx_global_variable);
+        spin_unlock(&etx_spinlock);
+        msleep(1000);
+    }
+    return 0;
+}
+
+/*
+***thread function 2
+*/
+int thread_function2(void *pv)
+{
+    while(!kthread_should_stop()) {
+        spin_lock(&etx_spinlock);
+        etx_global_variable++;
+        pr_info("In EmbeTronicX Thread Function2 %lu\n", etx_global_variable);
+        spin_unlock(&etx_spinlock);
+        msleep(1000);
+    }
+    return 0;
+}
+#+end_src

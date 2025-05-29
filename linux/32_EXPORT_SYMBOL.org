@@ -1,0 +1,75 @@
+* EXPORT_SYMBOL
+In the Linux Kernel 2.4, all the non-static symbols are exported to the kernel space automatically. But later, in Linux Kernel 2.6 instead of exporting all non-static symbols, they wanted to export the only symbols which are marked by EXPORT_SYMBOL() macro.
+
+#+begin_src c
+  u64 hrtimer_forward(struct hrtimer *timer, ktime_t now, ktime_t interval)
+  {
+    .....
+  }
+  EXPORT_SYMBOL_GPL(hrtimer_forward);
+#+end_src
+When some symbols (variables or functions) are using EXPORT_SYMBOL macro (ex. EXPORT_SYMBOL(func_name)), those symbols are exposed to all the loadable kernel drivers. You can call them directly in your kernel module without modifying the kernel code. In other words, It tells the kbuild mechanism that the symbol referred to should be part of the global list of kernel symbols. That allows the kernel modules to access them.
+
+*EXPORT_SYMBOL* exports the symbol to any loadable module.
+*EXPORT_SYMBOL_GPL* exports the symbol only to GPL-licensed modules
+
+** how to use
+
+1. Declare and define the symbol (functions or variables) which you want to make it visible to other kernel modules. Then below the definition, use EXPORT_SYMBOL(symbol name). Now it is visible to all loadable modules.
+2.Now take the kernel driver who is gonna use the above-exported symbol. Declare the symbol using extern. Then use the symbol directly.
+3.Finally, load the module first, who has the definition of the export symbol. Then load the caller module using insmod“.
+** limitation
+
+- That symbol should not be static or inline.
+- Order of loading the driver is matter. ie. We should load the module which has the definition of the symbol, then only we can load the module that is using that symbol.
+
+* Template
+** driver1.c
+#+begin_src c
+int etx_count = 0;              //Exported variable
+
+/*
+**exported function
+*/ 
+void etx_shared_func(void)
+{
+        pr_info("Shared function been called!!!\n");
+        etx_count++;
+}
+//EXPORT_SYMBOL_GPL(etx_shared_func);
+EXPORT_SYMBOL(etx_shared_func);
+EXPORT_SYMBOL(etx_count);
+#+end_src
+** driver2.c
+#+begin_src c
+    
+extern int etx_count;
+void etx_shared_func(void); //Function declaration is by defalut extern
+
+/*
+**This function will be called when we read the Device file
+*/
+static ssize_t etx_read(struct file *filp, 
+                                char __user *buf, size_t len, loff_t *off)
+{
+        etx_shared_func();
+        pr_info("%d time(s) shared function called!\n", etx_count);
+        pr_info("Data Read : Done!\n");
+        return 0;
+}
+
+#+end_src
+The modprobe order here matters. Our shared functions are metioned here in Module.symvers.
+#+begin_src sh
+0x00000000	etx_shared_func	/home/zyy/repo/riscv-linux-from-scratch/driver/driver-symbol/driver1	EXPORT_SYMBOL	
+0x00000000	etx_count	/home/zyy/repo/riscv-linux-from-scratch/driver/driver-symbol/driver1	EXPORT_SYMBOL	
+#+end_src
+
+#+begin_src c
+~ # cat /proc/kallsyms | grep etx_shared_func
+ffffffff00f02000 T etx_shared_func	[driver1]
+~ # 
+~ # modprobe -r driver1
+modprobe: remove 'driver1': Resource temporarily unavailable
+#+end_src
+

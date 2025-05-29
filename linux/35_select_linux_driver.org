@@ -1,0 +1,104 @@
+* Select
+** usage in application
+Macros that are used to operate on the fd.
+#+begin_src c
+  FD_ZERO()
+  FD_SET()
+  FD_CLR()
+  FD_ISSET()
+#+end_src
+** select api
+#+begin_src c
+int select(int nfds, fd_set *readfds, fd_set *writefds,
+            fd_set *exceptfds, struct timeval *timeout);
+
+void FD_CLR(int fd, fd_set *set);
+int  FD_ISSET(int fd, fd_set *set);
+void FD_SET(int fd, fd_set *set);
+void FD_ZERO(fd_set *set);
+
+int pselect(int nfds, fd_set *readfds, fd_set *writefds,
+            fd_set *exceptfds, const struct timespec *timeout,
+            const sigset_t *sigmask);
+
+#+end_src
+** difference between select and poll
+select was introduced in BSD Unix, released in August 1983, whereas poll was introduced in SVR3 Unix, released in 1986.
+
+Operations in poll and select is linear and slow because of having a lot of checks.
+
+The main advantage of select is the fact that it is very portable – every UNIX-like OS has it. Some Unix systems do not support poll.
+
+With select, the file descriptor sets are reconstructed on return, so each subsequent call must reinitialize them. The poll system call separates the input (events field) from the output (revents field), allowing the array to be reused without change.
+
+The timeout parameter to select is undefined on return. So, we need to reinitialize it. poll does not require the user to calculate the value of the highest-numbered file descriptor +1. Whereas in select, we have to calculate the nfds or pass the maximum number using FD_SETSIZE.
+
+poll is more efficient for large-valued file descriptors. For example, when you want to wait for the events in the file descriptor (fd) 1000, poll will directly use that fd. But if you use this 1000 fd in select, it has to iterate (loop) from 0 to 999 to check any file has data.
+
+In the select, we need to iterate over the file descriptors to check if it exists on the set returned from select. But in the poll, we can check only we wanted to.
+
+In the poll, you can use the file descriptor which is more than 1024. But in select you cannot use it. If you use the file descriptor which is more than or equal to 1024 (FD_SETSIZE), then it may destroy your stack. How? select’s file descriptor sets are statically sized.
+
+* Template
+#+begin_src c
+#include <assert.h>
+#include <fcntl.h>
+#include <poll.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <unistd.h>
+#include <string.h>
+
+int main()
+{
+  char   kernel_val[20];
+  fd_set read_fd, write_fd;
+  struct timeval timeout;
+  int    ret;
+  int    fd = open("/dev/etx_device", O_RDWR | O_NONBLOCK);
+  
+  if( fd == -1 )  
+  {
+    perror("open");
+    exit(EXIT_FAILURE);
+  }
+  
+  while( 1 ) 
+  {
+    puts("Starting Select...");
+    
+    /* Initialize the file descriptor set. */
+    FD_ZERO( &read_fd );
+    FD_SET( fd, &read_fd );
+    FD_ZERO( &write_fd );
+    FD_SET( fd, &write_fd );
+    
+    /* Initialize the timeout */
+    timeout.tv_sec  = 5;       //5 Seconds
+    timeout.tv_usec = 0;
+    
+    ret = select(FD_SETSIZE, &read_fd, &write_fd, NULL, &timeout);
+    
+    if( ret < 0 ) 
+    {
+      perror("select");
+      assert(0);
+    }
+    
+    if( FD_ISSET( fd, &read_fd ) )
+    {
+      read(fd, &kernel_val, sizeof(kernel_val));
+      printf("READ : Kernel_val = %s\n", kernel_val);
+    }
+    
+    if( FD_ISSET( fd, &write_fd ) )
+    {
+      strcpy( kernel_val, "User Space");
+      write(fd, &kernel_val, strlen(kernel_val));
+      printf("WRITE : Kernel_val = %s\n", kernel_val);
+    }
+  }
+  
+  return 0;
+}
+#+end_src

@@ -1,0 +1,152 @@
+* Poll
+
+IO Multiplexing
+
+1. poll
+2. select
+3. epoll
+
+** poll events
+defined in /inclue/uapi/asm-generic/poll.h file.
+#+begin_src c
+/* These are specified by iBCS2 */
+#define POLLIN		0x0001
+#define POLLPRI		0x0002
+#define POLLOUT		0x0004
+#define POLLERR		0x0008
+#define POLLHUP		0x0010
+#define POLLNVAL	0x0020
+
+/* The rest seem to be more-or-less nonstandard. Check them! */
+#define POLLRDNORM	0x0040
+#define POLLRDBAND	0x0080
+#ifndef POLLWRNORM
+#define POLLWRNORM	0x0100
+#endif
+#ifndef POLLWRBAND
+#define POLLWRBAND	0x0200
+#endif
+#ifndef POLLMSG
+#define POLLMSG		0x0400
+#endif
+#ifndef POLLREMOVE
+#define POLLREMOVE	0x1000
+#endif
+#ifndef POLLRDHUP
+#define POLLRDHUP       0x2000
+#endif
+
+#define POLLFREE	(__force __poll_t)0x4000
+
+#define POLL_BUSY_LOOP	(__force __poll_t)0x8000
+
+struct pollfd {
+	int fd;
+	short events;
+	short revents;
+};
+#+end_src
+
+POLLIN:This bit must be set if the device can be read without blocking.
+POLLOUT:This bit is set in the return value if the device can be written to without blocking.
+POLLRDNORM:This bit must be set if “normal” data is available for reading. A readable device returns (POLLIN | POLLRDNORM).
+POLLWRNORM:This bit has the same meaning as POLLOUT, and sometimes it actually is the same number. A writable device returns (POLLOUT | POLLWRNORM).
+** waitqueue
+In the Linux device driver, the poll is internally using the wait queue. So we have to declare the wait queue and initialize that. You can use static or dynamic method.
+#+begin_src c
+#include <linux/wait.h>                 //Required for the wait queues
+
+/* Static method */
+//Waitqueue
+DECLARE_WAIT_QUEUE_HEAD(wait_queue_etx_data);
+
+/* Dynamic method */
+//Initialize wait queue
+init_waitqueue_head(&wait_queue_etx_data);
+#+end_src
+** poll_wait
+#+begin_src c
+/*
+**This fuction will be called when app calls the poll function
+*/
+static unsigned int etx_poll(struct file *filp, struct poll_table_struct *wait)
+{
+  __poll_t mask = 0;
+  
+  pr_info("Poll function\n");
+  
+  /* Do your Operation */
+    
+  return mask;
+}
+
+/*
+**File operation sturcture
+*/
+static struct file_operations fops =
+{
+  .poll           = etx_poll
+};
+#+end_src
+
+* Template
+#+begin_src c
+  
+static ssize_t sysfs_show(struct kobject *kobj, 
+                          struct kobj_attribute *attr, 
+                          char *buf)
+{
+  pr_info("Sysfs Show - Write Permission Granted!!!\n");
+  
+  can_write = true;
+  
+  //wake up the waitqueue
+  wake_up(&wait_queue_etx_data);
+  
+  return sprintf(buf, "%s", "Success\n");
+}
+
+/*
+**This function will be called when we write the sysfs file
+*/
+static ssize_t sysfs_store(struct kobject *kobj, 
+                           struct kobj_attribute *attr,
+                           const char *buf, 
+                           size_t count)
+{
+  pr_info("Sysfs Store - Read Permission Granted!!!\n");
+  
+  strcpy(etx_value, buf);
+  
+  can_read = true;
+
+  //wake up the waitqueue
+  wake_up(&wait_queue_etx_data);
+  
+  return count;
+}
+/*
+**This fuction will be called when app calls the poll function
+*/
+static unsigned int etx_poll(struct file *filp, struct poll_table_struct *wait)
+{
+  __poll_t mask = 0;
+  
+  poll_wait(filp, &wait_queue_etx_data, wait);
+  pr_info("Poll function\n");
+  
+  if( can_read )
+  {
+    can_read = false;
+    mask |= ( POLLIN | POLLRDNORM );
+  }
+  
+  if( can_write )
+  {
+    can_write = false;
+    mask |= ( POLLOUT | POLLWRNORM );
+  }
+    
+  return mask;
+}
+#+end_src
