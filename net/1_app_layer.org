@@ -1,5 +1,7 @@
 * Application Layer
 * Protocol
+http protocol
+
 * API Usage
 ** socket
 In use application layer, if two of programs
@@ -33,7 +35,13 @@ For type options in lwip, there are two options for TCP/UDP/RAM. But that is eno
 The return value will be a integer specifed by lwip.
 * User Program
 A httpd user program runs on our riscv64-with-e1000card machine, and other user program like firefox can connect this server over the TCP/IP protocol, and transmit data using the http protocol in application layer.
-
+** application socket
+1. create a server socket
+2.construct server sockaddr_in ip address and port
+3.bind server socket
+4.listen socket
+5.accept and then handle_request
+6.close the connection
 #+begin_src c
 void
 umain(int argc, char **argv)

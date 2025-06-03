@@ -447,3 +447,81 @@ asmlinkage __visible void __init __no_sanitize_address start_kernel(void)
 #+end_src
 
 
+
+* start_kernel
+** init sequence
+** arch_call_rest_init
+#+begin_src c
+void __init __weak arch_call_rest_init(void)
+{
+	rest_init();
+}
+#+end_src
+** rest_init
+#+begin_src c
+/*
+ * We need to finalize in a non-__init function or else race conditions
+ * between the root thread and the init thread may cause start_kernel to
+ * be reaped by free_initmem before the root thread has proceeded to
+ * cpu_idle.
+ *
+ * gcc-3.4 accidentally inlines this function, so use noinline.
+ */
+noinline void __ref rest_init(void)
+{
+	struct task_struct *tsk;
+	int pid;
+
+	rcu_scheduler_starting();
+	/*
+	 * We need to spawn init first so that it obtains pid 1, however
+	 * the init task will end up wanting to create kthreads, which, if
+	 * we schedule it before we create kthreadd, will OOPS.
+	 */
+	pid = kernel_thread(kernel_init, NULL, CLONE_FS);
+	/*
+	 * Pin init on the boot CPU. Task migration is not properly working
+	 * until sched_init_smp() has been run. It will set the allowed
+	 * CPUs for init to the non isolated CPUs.
+	 */
+	rcu_read_lock();
+	tsk = find_task_by_pid_ns(pid, &init_pid_ns);
+	tsk->flags |= PF_NO_SETAFFINITY;
+	set_cpus_allowed_ptr(tsk, cpumask_of(smp_processor_id()));
+	rcu_read_unlock();
+
+	numa_default_policy();
+	pid = kernel_thread(kthreadd, NULL, CLONE_FS | CLONE_FILES);
+	rcu_read_lock();
+	kthreadd_task = find_task_by_pid_ns(pid, &init_pid_ns);
+	rcu_read_unlock();
+
+	/*
+	 * Enable might_sleep() and smp_processor_id() checks.
+	 * They cannot be enabled earlier because with CONFIG_PREEMPTION=y
+	 * kernel_thread() would trigger might_sleep() splats. With
+	 * CONFIG_PREEMPT_VOLUNTARY=y the init task might have scheduled
+	 * already, but it's stuck on the kthreadd_done completion.
+	 */
+	system_state = SYSTEM_SCHEDULING;
+
+	complete(&kthreadd_done);
+
+	/*
+	 * The boot idle thread must execute schedule()
+	 * at least once to get things moving:
+	 */
+	schedule_preempt_disabled();
+	/* Call into cpu_idle with preempt disabled */
+	cpu_startup_entry(CPUHP_ONLINE);
+}
+#+end_src
+** kernel_init
+The pid1 process is *init*. The init process first runs in kernel space, then it read the init from disk space and runs in user space, after that the system is booted up.
+** kthreadd
+PID 2 process kthreadd, the job of this process is mainly for schedule process and etc.
+
+
+* init
+
+* kthreadd
