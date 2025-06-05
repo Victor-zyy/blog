@@ -3,3 +3,13 @@
 #+begin_src sh
   git pull --rebase <your_repository_name> <your_branch>
 #+end_src
+
+** generate patch
+#+begin_src sh
+  diff -Nura m4-1.4.18.orig/lib/c-stack.c m4-1.4.18/lib/c-stack.c
+#+end_src
+** patch command
+-pN N indicates ignore the directory level, -p0 means that m4-1.4.18 is included. -p1 indicates m4-1.4.18 is ignored.
+#+begin_src sh
+  patch -p0 < xx.patch
+#+end_src

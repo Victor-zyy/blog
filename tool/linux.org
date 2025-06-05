@@ -1,0 +1,19 @@
+* extract file
+** extract .deb file in linux
+#+begin_src sh
+  To list the files in the package:
+
+  dpkg --contents foobar.deb
+
+  Then extract whole package into a foo_1.2.3
+
+  dpkg-deb -x /var/cache/apt/archives/foo_1.2.3.deb foo_1.2.3
+#+end_src
+
+** install deb file
+*** command line
+#+begin_src sh
+  sudo dpkg -i ~/Downloads/htop_3.3.0-4build1_amd64.deb
+#+end_src
+*** double click
+

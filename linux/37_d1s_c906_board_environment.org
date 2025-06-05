@@ -1,0 +1,297 @@
+* Set Up Board
+** environment host
+Linux ubuntu 6.8.0-60-generic #63~22.04.1-Ubuntu SMP PREEMPT_DYNAMIC Tue Apr 22 19:00:15 UTC 2 x86_64 x86_64 x86_64 GNU/Linux
+gcc (Ubuntu 13.1.0-8ubuntu1~22.04) 13.1.0
+GNU Make 4.3 Built for x86_64-pc-linux-gnu
+g++ (Ubuntu 13.1.0-8ubuntu1~22.04) 13.1.0
+TinaSDK V2.0
+
+** adb tool
+#+begin_src sh
+  $ sudo apt install adb
+#+end_src
+** d1s sdk
+downloads the sdk package from dongshanpi, and then extract it in ubuntu
+#+begin_src sh
+  $ cat tina-d1-h.tar.bz2.* | tar -jxv
+#+end_src
+Then we need to clone d1s sdk patch from github 
+#+begin_src sh
+  $ git clone  https://gitee.com/weidongshan/DongshanPI-D1s_TinaSDK.git
+  $ cp -rfvd  DongshanPI-D1s_TinaSDK/* tina-d1-h/
+#+end_src
+After that, add some dependencies of building.
+#+begin_src sh
+  $ sudo apt-get install -y  libncurses5-dev   u-boot-tools
+#+end_src
+** compile and setup
+#+begin_src sh
+  $ source build/envsetup.sh 
+  Setup env done! Please run lunch next.
+  $ vim build/envsetup.sh 
+  $ lunch 
+
+  You're building on Linux
+
+  Lunch menu... pick a combo:
+       1. d1-h_nezha_min-tina
+       2. d1-h_nezha-tina
+       3. d1s_nezha_nand-tina
+       4. d1s_nezha_nor-tina
+       5. d1s_nezha_sd-tina
+       6. d1s_nezha-tina
+
+  Which would you like?: 4
+  ============================================
+  TINA_BUILD_TOP=/home/zyy/repo/d1s_workbench/Tina-SDK_DevelopLearningKits-V1/tina-d1-h
+  TINA_TARGET_ARCH=riscv
+  TARGET_PRODUCT=d1s_nezha_nor
+  TARGET_PLATFORM=d1s
+  TARGET_BOARD=d1s-nezha_nor
+  TARGET_PLAN=nezha_nor
+  TARGET_BUILD_VARIANT=tina
+  TARGET_BUILD_TYPE=release
+  TARGET_KERNEL_VERSION=5.4
+  TARGET_UBOOT=u-boot-2018
+  TARGET_CHIP=sun20iw1p1
+  ============================================
+  no buildserver to clean
+  [1] 94252
+#+end_src
+
+** compile error
+*** m4 compile host error on ubuntu22.04
+#+begin_src sh
+In file included from /usr/include/signal.h:328,
+                 from ./signal.h:52,
+                 from c-stack.c:49:
+c-stack.c:55:35: error: missing binary operator before token "("
+   55 | #elif HAVE_LIBSIGSEGV && SIGSTKSZ < 16383
+#+end_src
+
+#+begin_src sh
+ wget https://toolchains.bootlin.com/downloads/releases/sources/m4-1.4.18/0003-c-stack-stop-using-SIGSTKSZ.patch
+/home/zyy/repo/d1s_workbench/Tina-SDK_DevelopLearningKits-V1/tina-d1-h/out/d1s-nezha_nor/compile_dir/host
+         patch -p0 < 0003-c-stack-stop-using-SIGSTKSZ.patch 
+         patching file m4-1.4.18/lib/c-stack.c
+         patching file m4-1.4.18/lib/c-stack.h
+#+end_src
+
+*** tools/mklibs: Fix compile with GCC 11
+#+begin_src sh
+  GCC 11 defaults to C++17, but mklibs does not compile when using the
+C++17 standard. This patch switches back to the gnu++98 version like
+done in master commit 9437012b9ee4 ("tools/mklibs: update to 0.1.44 and
+convert to Python 3")
+
+This fixes the following compile error message:
+elf.hpp:52:56: error: ISO C++17 does not allow dynamic exception specifications
+   52 |       const section &get_section(unsigned int i) const throw (std::out_of_range) { return *sections.at(i); };
+
+Signed-off-by: Hauke Mehrtens <hauke@hauke-m.de>
+#+end_src
+
+solution
+#+begin_src sh
+  /tina-d1-h/out/d1s-nezha_nor/compile_dir/host/mklibs-0.1.35/src/mklibs-readelf/Makefile
+CPPFLAGS += -std=gnu++98
+
+#+end_src
+
+*** libfakeroot
+error message
+#+begin_src sh
+libfakeroot.c:99:40: error: ‘_STAT_VER’ undeclared (first use in this function)
+#+end_src
+
+#+begin_src sh
+  tina-d1-h/out/d1s-nezha_nor/compile_dir/host/fakeroot-1.20.2
+92   
+   1 #ifndef _STAT_VER
+   2 #if defined (__aarch64__)
+   3   #define _STAT_VER 0
+   4 #elif defined (__x86_64__)
+   5   #define _STAT_VER 1
+   6 #else
+   7   #define _STAT_VER 3
+   8 #endif
+   9 #endif
+
+
+#+end_src
+
+*** squashfs
+error message
+#+begin_src sh
+/usr/bin/ld: read_fs.o:(.bss+0x0): multiple definition of `bwriter_buffer'; mksquashfs.o:(.bss+0x0): first defined here
+#+end_src
+Get this patch file in openwrt, and then patch your src code.
+#+begin_src sh
+tools/squashfskit4/patches/0002-fix-build-failure-against-gcc-10.patch
+tina-d1-h/out/d1s-nezh_nor/compile_dir/host/squashfskit-v4.14$ patch -p1 < ../0002-fix-build-failure-against-gcc-10.patch 
+patching file squashfs-tools/mksquashfs.h
+#+end_src
+
+
+
+Another one to add things in squashfs-tools/process_fragments.c
+#+begin_src sh
+4 extern struct cache *bwrite_buffer;
+5 extern struct cache *fwrite_buffer;
+#+end_src
+
+another error message reported here.
+#+begin_src sh
+/usr/bin/ld: /home/zyy/repo/d1s_workbench/Tina-SDK_DevelopLearningKits-V1/tina-d1-h/out/host/lib/liblzma.a(liblzma_la-check.o): in function `lzma_check_init':
+check.c:(.text+0x65): undefined reference to `SHA256Init'
+/usr/bin/ld: /home/zyy/repo/d1s_workbench/Tina-SDK_DevelopLearningKits-V1/tina-d1-h/out/host/lib/liblzma.a(liblzma_la-check.o): in function `lzma_check_update':
+check.c:(.text+0xcc): undefined reference to `SHA256Update'
+/usr/bin/ld: /home/zyy/repo/d1s_workbench/Tina-SDK_DevelopLearningKits-V1/tina-d1-h/out/host/lib/liblzma.a(liblzma_la-check.o): in function `lzma_check_finish':
+check.c:(.text+0x115): undefined reference to `SHA256Final'
+
+#+end_src
+
+Add makefile linker libs -lmd, to link SHA256final like functions.
+And if you look at the symbol tabs of libmd.a, you will see the functions needed table.
+#+begin_src sh
+  nm /usr/lib/x86_64-linux-gnu/libmd.a 
+  0000000000000240 T SHA256Data
+  0000000000000000 T SHA256End
+  0000000000000230 T SHA256File
+  00000000000000b0 T SHA256FileChunk
+                      U SHA256Final
+
+                  // Makefile
+  137 LIBS = -lpthread -lm -lmd
+#+end_src
+
+** pack
+When done with the compile command, we have to then pack the img. The pack command is used to make our image look like a nor-flash layout, we got mtdparts and so on.
+** burn nor flash
+#+begin_src sh
+  xfel spinor write 0 xx.img 
+#+end_src
+** adb shell/devices not found
+#+begin_src sh
+  zyy@ubuntu:~$ adb shell 
+  error: no devices/emulators found
+  zyy@ubuntu:~$ 
+
+#+end_src
+
+** android
+#+begin_src sh
+  # Clone this repository
+  git clone https://github.com/M0Rf30/android-udev-rules.git
+  cd android-udev-rules
+
+  # Copy rules file
+  sudo cp -v 51-android.rules /etc/udev/rules.d/51-android.rules
+      
+  # Change file permissions
+  sudo chmod a+r /etc/udev/rules.d/51-android.rules
+
+  # Add the adbusers group if it's doesn't already exist
+  sudo cp android-udev.conf /usr/lib/sysusers.d/
+  sudo systemd-sysusers
+
+  # Add your user to the adbusers group
+  sudo gpasswd -a $(whoami) adbusers
+
+  # Restart UDEV
+  sudo udevadm control --reload-rules
+  sudo systemctl restart systemd-udevd.service
+
+  # Restart the ADB server (back to Debian again)
+  adb kill-server
+
+  # Replug your Android device and verify that USB debugging is enabled in
+  # developer options
+  adb devices
+
+#+end_src
+** image burn not using xfel
+*** awusb driver on ubuntu
+#+begin_src sh
+  https://github.com/linux-sunxi/sunxi-livesuite.git
+  cd sunxi-livesuite
+  cd awusb
+  sudo make modules_install
+  sudo depmod -a
+  sudo modprobe awusb
+  
+#+end_src
+But on ubuntu22.04, we have to sign the driver module to make it safe to our system. A script goes below.
+#+begin_src sh
+  sudo su
+  mkdir modules-signing
+  vim sign_script
+  #!/bin/bash
+  modfile=(awusb tty0tty)
+  echo ${modfile[@]}
+  for module in ${modfile[@]}; do
+          echo "Signing $module"
+          /usr/src/linux-headers-$(uname -r)/scripts/sign-file sha256 \
+                  /root/modules-signing/MOK.priv \
+                  /root/modules-signing/MOK.der $(modinfo -n $module)
+  done
+
+#+end_src
+
+After that we have to compile the sunxi-livesuite tool to download our image to file.
+#+begin_src sh
+
+  Just run the top level script:
+  > sudo ./LiveSuit.sh
+
+  This will determine whether your system is x86 or x86-64 and will then
+  start the right binary.
+
+  Flashing your device.
+  ---------------------
+
+  Warning: if you attach your FEL enabled device before you start
+  LiveSuit, then LiveSuit will not detect it. You need to first start the
+  LiveSuit application.
+
+  First, properly power down the device by either pressing and holding the
+  power button for about 10 seconds, or by cutting all power in case of
+  development board.
+
+  Start LiveSuit and select an image for flashing, if you haven't already
+    done so.
+    
+    Then, hold the FEL button, and power up the device. Either by attaching
+    the power lead, or by pressing the power button for 1-2s and then
+    pressing and releasing the power button several times in quick
+    succession. This will have made your device enter FEL mode.
+    
+    Now attach the USB OTG lead. LiveSuit should now detect your device and
+    start flashing.
+#+end_src
+
+*** xfel burn 
+
+** adb shell
+#+begin_src sh
+zyy@ubuntu:~$ adb shell 
+BusyBox v1.27.2 () built-in shell (ash)
+
+ _____  _              __     _
+|_   _||_| ___  _ _   |  |   |_| ___  _ _  _ _
+  | |   _ |   ||   |  |  |__ | ||   || | ||_'_|
+  | |  | || | || _ |  |_____||_||_|_||___||_,_|
+  |_|  |_||_|_||_|_|  Tina is Based on OpenWrt!
+ ----------------------------------------------
+ Tina Linux (Neptune, 61CC0487)
+ ----------------------------------------------
+root@(none):/# 
+
+#+end_src
+
+** adb push/pull
+#+begin_src c
+  $ adb push README.md  /mnt/UDISK
+  README.md: 1 file pushed. 0.0 MB/s (21 bytes in 0.025s)
+  $ adb pull /mnt/UDISK/README.md
+#+end_src
