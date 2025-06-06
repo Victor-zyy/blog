@@ -295,3 +295,46 @@ root@(none):/#
   README.md: 1 file pushed. 0.0 MB/s (21 bytes in 0.025s)
   $ adb pull /mnt/UDISK/README.md
 #+end_src
+
+** putty/GtkTerm
+Gtkterm is a very fantastic tool for me.
+#+begin_src sh
+[   11.409972] sunxi-mmc 4021000.sdmmc: smc 1 p1 err, cmd 5, RTO !!
+[   11.417541] sunxi-mmc 4021000.sdmmc: smc 1 p1 err, cmd 5, RTO !!
+[   11.425089] sunxi-mmc 4021000.sdmmc: smc 1 p1 err, cmd 5, RTO !!
+[   11.431856] sunxi-mmc 4021000.sdmmc: sdc set ios:clk 0Hz bm PP pm OFF vdd 0 width 1 timing LEGACY(SDR12) dt B
+[   13.364125] sunxi-rfkill soc@3000000:rfkill@0: wlan power off success
+[   13.471397] sunxi-mmc 4021000.sdmmc: sdc set ios:clk 0Hz bm PP pm UP vdd 21 width 1 timing LEGACY(SDR12) dt B
+[   13.482536] [XRADIO] Remove SDIO card 1
+[   13.494100] sunxi-mmc 4021000.sdmmc: no vqmmc,Check if there is regulator
+[   13.503689] [SBUS_ERR] sdio probe timeout!
+[   13.508380] [XRADIO_ERR] sbus_sdio_init failed
+[   13.514682] sunxi-mmc 4021000.sdmmc: sdc set ios:clk 400000Hz bm PP pm ON vdd 21 width 1 timing LEGACY(SDR12) dt B
+[   13.526623] xradio_core_init failed (-110)!
+[   13.557701] sunxi-mmc 4021000.sdmmc: smc 1 p1 err, cmd 52, RTO !!
+[   13.565403] sunxi-mmc 4021000.sdmmc: smc 1 p1 err, cmd 52, RTO !!
+[   13.572225] sunxi-mmc 4021000.sdmmc: sdc set ios:clk 400000Hz bm PP pm ON vdd 21 width 1 timing LEGACY(SDR12) dt B
+[   13.587078] sunxi-mmc 4021000.sdmmc: sdc set ios:clk 400000Hz bm PP pm ON vdd 21 width 1 timing LEGACY(SDR12) dt B
+[   13.600929] sunxi-mmc 4021000.sdmmc: smc 1 p1 err, cmd 5, RTO !!
+[   13.608570] sunxi-mmc 4021000.sdmmc: smc 1 p1 err, cmd 5, RTO !!
+[   13.616632] sunxi-mmc 4021000.sdmmc: smc 1 p1 err, cmd 5, RTO !!
+[   13.624191] sunxi-mmc 4021000.sdmmc: smc 1 p1 err, cmd 5, RTO !!
+[   13.630920] sunxi-mmc 4021000.sdmmc: sdc set ios:clk 0Hz bm PP pm OFF vdd 0 width 1 timing LEGACY(SDR12) dt B
+kmodloader done
+
+BusyBox v1.27.2 () built-in shell (ash)
+ _____  _              __     _
+|_   _||_| ___  _ _   |  |   |_| ___  _ _  _ _
+  | |   _ |   ||   |  |  |__ | ||   || | ||_'_|
+  | |  | || | || _ |  |_____||_||_|_||___||_,_|
+  |_|  |_||_|_||_|_|  Tina is Based on OpenWrt!
+ ----------------------------------------------
+ Tina Linux (Neptune, 61CC0487)
+ ----------------------------------------------
+root@TinaLinux:/# [   32.484029] usb1-vbus: disabling
+
+#+end_src
+
+[[file:./static/linux_driver/images/37_GtkTerm.png]]
+
+And I can save my configurations and use it when I open it later again, it's fascinating!
