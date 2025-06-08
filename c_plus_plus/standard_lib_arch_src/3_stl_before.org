@@ -1,0 +1,13 @@
+* STL Before
+** location
+#+begin_src sh
+  /usr/include/c++/11/
+  /usr/include/c++/11/bits/
+  /usr/include/c++/11/ext/ 
+#+end_src
+
+** OOP and GP
+OOP combines data and method, GP wants to divide the data and method.
+GP advantages: let the container designer and algorithm designer apart, so that each of them will make it more efficiently, or so, the use iterator as the bridge to connect the container and algorithm.
+
+And algorithms foothold on the comparison. So the most important thing in GP is operator overload functions.

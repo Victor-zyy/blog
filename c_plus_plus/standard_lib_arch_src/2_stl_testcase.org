@@ -71,7 +71,8 @@ int compareStrings(const void *a, const void *b) {
 }
 #+end_src
 
-** array-test
+** sequential container
+*** array-test
 #+begin_src c++
 namespace zz01
 {
@@ -110,7 +111,7 @@ namespace zz01
 
 Remember that, if you use bsearch, you have to give it a sequential array which means the arrays are consecutive in memory. And c.data() refered to the first element address.
 
-** test_vector
+*** test_vector
 #+begin_src c
 namespace zz02
 {
@@ -173,7 +174,7 @@ Another thing we need to know is that, if the container have an inner method lik
 
 Also, vector is sequentially in memory, it will allocate memory in large and copy the contents into the new memory.
 And vector grows like pow(2,n), which means the speed is low in memory growth.
-** test_list
+*** test_list
 #+begin_src c++
 namespace zz03
 {
@@ -222,5 +223,472 @@ namespace zz03
 
 Actually, the list above is double-linked list, but not sequentially in memory, the list has no .data method, confirming that it is not sequentially in memory. Likewise, it has many inner methods like sort, insert, merge, etc. If you have some requests, try to use inner methods first before find the global methods.
 
-** test_forwardlist
+*** test_forwardlist
+#+begin_src c++
+namespace zz04
+{
+  void test_forwardlist(long &value)
+  {
+    cout << "\ntest_forwardlist()......... \n";
+    forward_list<string> c;
+    char buf[10];
+
+    clock_t timeStart = clock();
+    for(long i = 0; i < value; i++){
+      try {
+	snprintf(buf, 10, "%d", rand());
+	c.push_front(string(buf));
+      }
+      catch(exception& p){
+	// it may throw an exception of std::bad_alloc
+	// that is because the vector allocates memory in order and copy
+	// the old contents to the new memory
+	cout << "i = " << i << " " << p.what() << endl;
+	abort();
+      }
+    }
+    cout << "milli-seconds : " << clock() - timeStart << endl;
+    cout << "forward_list.max_size()  : " << c.max_size() << endl;
+    cout << "forward_list.front() : " << c.front() << endl;
+    //cout << "list.back()  : " << c.back() << endl;
+    //cout << "list.size()  : " << c.size() << endl;
+
+    string target = get_a_target_string();
+    timeStart = clock();
+    auto pItem = ::find(c.begin(), c.end(), target);
+    cout << "milli-seconds of ::find : " << clock() - timeStart << endl;
+
+    if(pItem != c.end())
+      cout << "Found : " << *pItem << endl;
+    else
+      cout << "not Found! " << endl;
+
+    timeStart = clock();
+    c.sort();
+    cout << "milli-seconds of list.sort : " << clock() - timeStart << endl;
+  }
+}
+#+end_src
+
+*** test_deque
+Deque is piecewise continuous, differs from pow(2) expands memory, the deque allocates memory in need.
+deque has member functions like operating head and tail of this structure.
+#+begin_src c++
+  push_front
+  push_back
+  pop_front
+  pop_back
+#+end_src
+#+begin_src c++
+namespace zz05
+{
+  void test_deque(long &value)
+  {
+    cout << "\ntest_queue()......... \n";
+    deque<string> c;
+    char buf[10];
+
+    clock_t timeStart = clock();
+    for(long i = 0; i < value; i++){
+      try {
+	snprintf(buf, 10, "%d", rand());
+	c.push_back(string(buf));
+      }
+      catch(exception& p){
+	// it may throw an exception of std::bad_alloc
+	// that is because the vector allocates memory in order and copy
+	// the old contents to the new memory
+	cout << "i = " << i << " " << p.what() << endl;
+	abort();
+      }
+    }
+    cout << "milli-seconds : " << clock() - timeStart << endl;
+    cout << "deque.size()  : " << c.size() << endl;
+    cout << "deque.front()  : " << c.front() << endl;
+    cout << "deque.back()  : " << c.back() << endl;
+    cout << "deque.max_size()  : " << c.max_size() << endl;
+
+    string target = get_a_target_string();
+    timeStart = clock();
+    auto pItem = ::find(c.begin(), c.end(), target);
+    cout << "milli-seconds of ::find : " << clock() - timeStart << endl;
+
+    if(pItem != c.end())
+      cout << "Found : " << *pItem << endl;
+    else
+      cout << "not Found! " << endl;
+
+    timeStart = clock();
+    ::sort(c.begin(), c.end());
+    cout << "milli-seconds of list.sort : " << clock() - timeStart << endl;
+  }
+}
+#+end_src
+
+*** test_stack
+#+begin_src c++
+namespace zz06
+{
+  void test_stack(long &value)
+  {
+    cout << "\ntest_stack()......... \n";
+    stack<string> c;
+    char buf[10];
+
+    clock_t timeStart = clock();
+    for(long i = 0; i < value; i++){
+      try {
+	snprintf(buf, 10, "%d", rand());
+	c.push(string(buf));
+      }
+      catch(exception& p){
+	// it may throw an exception of std::bad_alloc
+	// that is because the vector allocates memory in order and copy
+	// the old contents to the new memory
+	cout << "i = " << i << " " << p.what() << endl;
+	abort();
+      }
+    }
+    cout << "milli-seconds : " << clock() - timeStart << endl;
+    cout << "stack.size()  : " << c.size() << endl;
+    cout << "stack.top()  : " << c.top() << endl;
+    c.pop();
+    cout << "stack.size()  : " << c.size() << endl;
+    cout << "stack.top()  : " << c.top() << endl;
+
+  }
+}
+#+end_src
+
+Be ware that, stack and queue has no member of begin and end iterator. So you can't use sort and find function to them.
+
+*** test_queue
+#+begin_src c++
+namespace zz07
+{
+  void test_queue(long &value)
+  {
+    cout << "\ntest_stack()......... \n";
+    queue<string> c;
+    char buf[10];
+
+    clock_t timeStart = clock();
+    for(long i = 0; i < value; i++){
+      try {
+	snprintf(buf, 10, "%d", rand());
+	c.push(string(buf));
+      }
+      catch(exception& p){
+	// it may throw an exception of std::bad_alloc
+	// that is because the vector allocates memory in order and copy
+	// the old contents to the new memory
+	cout << "i = " << i << " " << p.what() << endl;
+	abort();
+      }
+    }
+    cout << "milli-seconds : " << clock() - timeStart << endl;
+    cout << "queue.size()  : " << c.size() << endl;
+    cout << "queue.front()  : " << c.front() << endl;
+    cout << "queue.back()  : " << c.back() << endl;
+    c.pop();
+    cout << "queue.size()  : " << c.size() << endl;
+    cout << "queue.front()  : " << c.front() << endl;
+    cout << "queue.back()  : " << c.back() << endl;
+
+  }
+}
+#+end_src
+
+Stack and queue push method changes from push_back/push_front to push/pop.
+To give a flame shot of sequential container, here is a picture below.
+[[file:./static/c_plus_plus/images/2_sequential_container.png]]
+
+** associative container
+*** test_multiset
+#+begin_src c++
+namespace zz08
+{
+  void test_multiset(long &value)
+  {
+    cout << "\ntest_multiset()......... \n";
+    multiset<string> c;
+    char buf[10];
+
+    clock_t timeStart = clock();
+    for(long i = 0; i < value; i++){
+      try {
+	snprintf(buf, 10, "%d", rand());
+	c.insert(string(buf));
+      }
+      catch(exception& p){
+	// it may throw an exception of std::bad_alloc
+	// that is because the vector allocates memory in order and copy
+	// the old contents to the new memory
+	cout << "i = " << i << " " << p.what() << endl;
+	abort();
+      }
+    }
+    cout << "milli-seconds : " << clock() - timeStart << endl;
+    cout << "multiset.size()  : " << c.size() << endl;
+    cout << "multiset.max_size()  : " << c.max_size() << endl;
+
+    string target = get_a_target_string();
+    timeStart = clock();
+    auto pItem = ::find(c.begin(), c.end(), target);
+    cout << "milli-seconds of ::find : " << clock() - timeStart << endl;
+
+    if(pItem != c.end())
+      cout << "Found : " << *pItem << endl;
+    else
+      cout << "not Found! " << endl;
+
+    timeStart = clock();
+    auto Item = c.find(target);
+    cout << "milli-seconds of list.sort : " << clock() - timeStart << endl;
+    if(Item != c.end())
+      cout << "Found : " << *pItem << endl;
+    else
+      cout << "not Found! " << endl;
+  }
+}
+#+end_src
+
+std::multiset is an associative container that contains a sorted set of objects of type Key. Unlike set, multiple keys with equivalent values are allowed. Sorting is done using the key comparison function Compare. Search, insertion, and removal operations have logarithmic complexity.
+
+*** test_multimap
+#+begin_src c++
+namespace zz09
+{
+  void test_multimap(long &value)
+  {
+    cout << "\ntest_multiset()......... \n";
+    multimap<long, string> c;
+    char buf[10];
+
+    clock_t timeStart = clock();
+    for(long i = 0; i < value; i++){
+      try {
+	snprintf(buf, 10, "%d", rand());
+	c.insert(pair<long, string>(i,string(buf))); // don't allowed to use [] to insert
+      }
+      catch(exception& p){
+	// it may throw an exception of std::bad_alloc
+	// that is because the vector allocates memory in order and copy
+	// the old contents to the new memory
+	cout << "i = " << i << " " << p.what() << endl;
+	abort();
+      }
+    }
+    cout << "milli-seconds : " << clock() - timeStart << endl;
+    cout << "multimap.size()  : " << c.size() << endl;
+    cout << "multimap.max_size()  : " << c.max_size() << endl;
+
+    long target = get_a_target_long();
+    timeStart = clock();
+    auto pItem = c.find(target);
+    cout << "milli-seconds of ::find : " << clock() - timeStart << endl;
+
+    if(pItem != c.end())
+      cout << "Found value : " << (*pItem).second << endl;
+    else
+      cout << "not Found! " << endl;
+  }
+}
+#+end_src
+Multimap uses unique key, <key,value> bindings of one element in rbtree. Find method of map will use Key to search and comparison. Multimap and unordered_multimap doesn't allow to use [] to insert value. But map and unordered_map does.
+*** test_set
+#+begin_src c++
+namespace zz12
+{
+  void test_set(long &value)
+  {
+    cout << "\ntest_multiset()......... \n";
+    set<string> c;
+    char buf[10];
+
+    clock_t timeStart = clock();
+    for(long i = 0; i < value; i++){
+      try {
+	snprintf(buf, 10, "%d", rand());
+	c.insert(string(buf));
+      }
+      catch(exception& p){
+	// it may throw an exception of std::bad_alloc
+	// that is because the vector allocates memory in order and copy
+	// the old contents to the new memory
+	cout << "i = " << i << " " << p.what() << endl;
+	abort();
+      }
+    }
+    cout << "milli-seconds : " << clock() - timeStart << endl;
+    cout << "set.size()  : " << c.size() << endl;
+    cout << "set.max_size()  : " << c.max_size() << endl;
+
+    string target = get_a_target_string();
+    timeStart = clock();
+    auto pItem = ::find(c.begin(), c.end(), target);
+    cout << "milli-seconds of ::find : " << clock() - timeStart << endl;
+
+    if(pItem != c.end())
+      cout << "Found : " << *pItem << endl;
+    else
+      cout << "not Found! " << endl;
+
+    timeStart = clock();
+    auto Item = c.find(target);
+    cout << "milli-seconds of list.sort : " << clock() - timeStart << endl;
+    if(Item != c.end())
+      cout << "Found : " << *pItem << endl;
+    else
+      cout << "not Found! " << endl;
+  }
+}
+#+end_src
+*** test_map
+#+begin_src c++
+namespace zz13
+{
+  void test_map(long &value)
+  {
+    cout << "\ntest_multiset()......... \n";
+    map<long, string> c;
+    char buf[10];
+
+    clock_t timeStart = clock();
+    for(long i = 0; i < value; i++){
+      try {
+	snprintf(buf, 10, "%d", rand());
+	c.insert(pair<long, string>(i,string(buf))); // don't allowed to use [] to insert
+      }
+      catch(exception& p){
+	// it may throw an exception of std::bad_alloc
+	// that is because the vector allocates memory in order and copy
+	// the old contents to the new memory
+	cout << "i = " << i << " " << p.what() << endl;
+	abort();
+      }
+    }
+    cout << "milli-seconds : " << clock() - timeStart << endl;
+    cout << "map.size()  : " << c.size() << endl;
+    cout << "map.max_size()  : " << c.max_size() << endl;
+
+    long target = get_a_target_long();
+    timeStart = clock();
+    auto pItem = c.find(target);
+    cout << "milli-seconds of ::find : " << clock() - timeStart << endl;
+
+    if(pItem != c.end())
+      cout << "Found value : " << (*pItem).second << endl;
+    else
+      cout << "not Found! " << endl;
+  }
+}
+#+end_src
+*** test_unordered_multimap
+#+begin_src c++
+namespace zz11
+{
+  void test_unordered_multimap(long &value)
+  {
+    cout << "\ntest_unordered_multimap()......... \n";
+    unordered_multimap<long,string> c;
+    char buf[10];
+
+    clock_t timeStart = clock();
+    for(long i = 0; i < value; i++){
+      try {
+	snprintf(buf, 10, "%d", rand());
+	c.insert(pair<long, string>(i, string(buf))); // don't allowed to use [] to insert
+      }
+      catch(exception& p){
+	// it may throw an exception of std::bad_alloc
+	// that is because the vector allocates memory in order and copy
+	// the old contents to the new memory
+	cout << "i = " << i << " " << p.what() << endl;
+	abort();
+      }
+    }
+    cout << "milli-seconds : " << clock() - timeStart << endl;
+    cout << "unordered_multimap.size()  : " << c.size() << endl;
+    cout << "unordered_multimap.max_size()  : " << c.max_size() << endl;
+
+    cout << "unordered_multimap.bucket_count()  : " << c.bucket_count() << endl;
+    cout << "unordered_multimap.load_factor()  : " << c.load_factor() << endl;
+    cout << "unordered_multimap.max_load_factor()  : " << c.max_load_factor() << endl;
+    cout << "unordered_multimap.max_bucket_count()  : " << c.max_bucket_count() << endl;
+
+    for(int i = 0; i < c.bucket_count() ; i++)
+      cout << "bucket #" << i << " has " << c.bucket_size(i) << " elememts!\n";
+
+    long target = get_a_target_long();
+    timeStart = clock();
+    auto pItem = c.find(target);
+    cout << "milli-seconds of ::find : " << clock() - timeStart << endl;
+
+    if(pItem != c.end())
+      cout << "Found value : " << (*pItem).second << endl;
+    else
+      cout << "not Found! " << endl;
+  }
+}
+#+end_src
+*** test_unordered_multiset
+#+begin_src c++
+namespace zz10
+{
+  void test_unordered_multiset(long &value)
+  {
+    cout << "\ntest_unordered_multiset()......... \n";
+    unordered_multiset<string> c;
+    char buf[10];
+
+    clock_t timeStart = clock();
+    for(long i = 0; i < value; i++){
+      try {
+	snprintf(buf, 10, "%d", rand());
+	c.insert(string(buf)); // don't allowed to use [] to insert
+      }
+      catch(exception& p){
+	// it may throw an exception of std::bad_alloc
+	// that is because the vector allocates memory in order and copy
+	// the old contents to the new memory
+	cout << "i = " << i << " " << p.what() << endl;
+	abort();
+      }
+    }
+    cout << "milli-seconds : " << clock() - timeStart << endl;
+    cout << "unordered_multiset.size()  : " << c.size() << endl;
+    cout << "unordered_multiset.max_size()  : " << c.max_size() << endl;
+    cout << "unordered_multiset.bucket_count()  : " << c.bucket_count() << endl;
+    cout << "unordered_multiset.load_factor()  : " << c.load_factor() << endl;
+    cout << "unordered_multiset.max_load_factor()  : " << c.max_load_factor() << endl;
+    cout << "unordered_multiset.max_bucket_count()  : " << c.max_bucket_count() << endl;
+
+    for(int i = 0; i < 20 ; i++)
+      cout << "bucket #" << i << " has " << c.bucket_size(i) << " elememts!\n";
+
+    string target = get_a_target_string();
+    timeStart = clock();
+    auto pItem = ::find(c.begin(), c.end(), target);
+    cout << "milli-seconds of ::find : " << clock() - timeStart << endl;
+
+    if(pItem != c.end())
+      cout << "Found value : " << *pItem << endl;
+    else
+      cout << "not Found! " << endl;
+
+    timeStart = clock();
+    auto Item = c.find(target);
+    cout << "milli-seconds of ::find : " << clock() - timeStart << endl;
+
+    if(Item != c.end())
+      cout << "Found value : " << *Item << endl;
+    else
+      cout << "not Found! " << endl;
+  }
+}
+#+end_src
+
+
+** allocator
 

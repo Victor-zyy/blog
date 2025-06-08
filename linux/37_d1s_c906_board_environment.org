@@ -103,7 +103,11 @@ error message
 #+begin_src sh
 libfakeroot.c:99:40: error: ‘_STAT_VER’ undeclared (first use in this function)
 #+end_src
-
+First we get the patch from link down below.
+#+begin_src sh
+https://bugs.archlinux.org/attachments/69572/19705/no_STAT_VER.patch
+#+end_src
+Then patch the file like that.
 #+begin_src sh
   tina-d1-h/out/d1s-nezha_nor/compile_dir/host/fakeroot-1.20.2
 92   
@@ -119,7 +123,6 @@ libfakeroot.c:99:40: error: ‘_STAT_VER’ undeclared (first use in this functi
 
 
 #+end_src
-
 *** squashfs
 error message
 #+begin_src sh
@@ -127,19 +130,15 @@ error message
 #+end_src
 Get this patch file in openwrt, and then patch your src code.
 #+begin_src sh
-tools/squashfskit4/patches/0002-fix-build-failure-against-gcc-10.patch
-tina-d1-h/out/d1s-nezh_nor/compile_dir/host/squashfskit-v4.14$ patch -p1 < ../0002-fix-build-failure-against-gcc-10.patch 
-patching file squashfs-tools/mksquashfs.h
+https://git.nju.edu.cn/nju/openwrt/-/raw/v19.07.6/tools/squashfskit4/patches/0002-fix-build-failure-against-gcc-10.patch
+  tina-d1-h/out/d1s-nezh_nor/compile_dir/host/squashfskit-v4.14$ patch -p1 < ../0002-fix-build-failure-against-gcc-10.patch 
+    patching file squashfs-tools/mksquashfs.h
 #+end_src
-
-
-
 Another one to add things in squashfs-tools/process_fragments.c
 #+begin_src sh
 4 extern struct cache *bwrite_buffer;
 5 extern struct cache *fwrite_buffer;
 #+end_src
-
 another error message reported here.
 #+begin_src sh
 /usr/bin/ld: /home/zyy/repo/d1s_workbench/Tina-SDK_DevelopLearningKits-V1/tina-d1-h/out/host/lib/liblzma.a(liblzma_la-check.o): in function `lzma_check_init':
@@ -148,7 +147,6 @@ check.c:(.text+0x65): undefined reference to `SHA256Init'
 check.c:(.text+0xcc): undefined reference to `SHA256Update'
 /usr/bin/ld: /home/zyy/repo/d1s_workbench/Tina-SDK_DevelopLearningKits-V1/tina-d1-h/out/host/lib/liblzma.a(liblzma_la-check.o): in function `lzma_check_finish':
 check.c:(.text+0x115): undefined reference to `SHA256Final'
-
 #+end_src
 
 Add makefile linker libs -lmd, to link SHA256final like functions.
