@@ -2,5 +2,33 @@
 ** qemu 7.0.0
 ** linux-kernel
 ** riscv64-linux-gnu-toolchain
+** set up
+#+begin_src sh
+  $ git clone https://gitee.com/tinylab/qemu-opensbi.git
+  $ cd qemu-opensbi/
+  $ export CROSS_COMPILE=riscv64-linux-gnu-
+  $ make all PLATFORM=generic PLATFORM_RISCV_XLEN=64
+#+end_src
+
+#+begin_src sh
+  $ git clone https://gitee.com/mirrors/u-boot.git
+  $ cd u-boot
+  $ git checkout v2022.04
+  $ export CROSS_COMPILE=riscv64-linux-gnu-
+  $ make qemu-riscv64_smode_defconfig
+  $ make -j $(nproc)
+#+end_src
+
+#+begin_src sh
+  $ git clone https://gitee.com/mirrors/busyboxsource
+  $ cd busyboxsource
+  $ export CROSS_COMPILE=riscv64-linux-gnu-
+  $ make defconfig
+  $ make menuconfig
+  $ make -j4
+  $ make install
+  $ cp busyboxsource/_install/* to directory of rootfs
+#+end_src
+
 * Linux Configuration
 

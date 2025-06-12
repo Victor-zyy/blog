@@ -1,0 +1,175 @@
+* Configuration
+
+#+begin_src sh
+  $ make menuconfig
+  $ ->Kernel Hacking
+  $ --->Tracers
+#+end_src
+
+* tracefs
+这个ftrace机制，在linux-kernel中就会挂载到VFS虚拟文件系统当中，你可以通过以下命令进行查看。
+#+begin_src sh
+  ~ # mount | grep tracefs
+  tracefs on /sys/kernel/debug/tracing type tracefs (rw,relatime)
+  zyy@ubuntu:~$ mount | grep tracefs
+  tracefs on /sys/kernel/tracing type tracefs (rw,nosuid,nodev,noexec,relatime)
+  tracefs on /sys/kernel/debug/tracing type tracefs (rw,nosuid,nodev,noexec,relatime)
+
+#+end_src
+Ok, 那么我们如果想要使用linux ftrae工具，可以进入到此文件路径下进行操作, 但是需要超级用户权限。
+#+begin_src sh
+  root@ubuntu:/sys/kernel/tracing# 
+#+end_src
+* Basic Usage
+要想使用Ftrace,关键就是设置好tracer,可以通过该路径下的available_tracers 进行查看.
+#+begin_src sh
+  root@ubuntu:/sys/kernel/tracing# cat available_tracers 
+  timerlat osnoise hwlat blk mmiotrace function_graph wakeup_dl wakeup_rt wakeup function nop
+#+end_src
+如果tracers是nop代表停止trace操作，如果是其余任何一个tracer,将会立即进行trace. Trace的结果会在trace文件中可以进行查看。
+#+begin_src sh
+  root@ubuntu:/sys/kernel/tracing# echo function > current_tracer 
+  root@ubuntu:/sys/kernel/tracing# cat trace | head -20
+  # tracer: function
+  #
+  # entries-in-buffer/entries-written: 0/0   #P:12
+  #
+  #                                _-----=> irqs-off/BH-disabled
+  #                               / _----=> need-resched
+  #                              | / _---=> hardirq/softirq
+  #                              || / _--=> preempt-depth
+  #                              ||| / _-=> migrate-disable
+  #                              |||| /     delay
+  #           TASK-PID     CPU#  |||||  TIMESTAMP  FUNCTION
+  #              | |         |   |||||     |         |
+#+end_src
+还要说一点的就是，即便将current_tracer进行设置为非nop,如果tracing_on开关没有打开的话，trace也并不会输出。
+#+begin_src sh
+  root@ubuntu:/sys/kernel/tracing# echo 1 > tracing_on 
+  root@ubuntu:/sys/kernel/tracing# cat trace | head -20
+  # tracer: function
+  #
+  # entries-in-buffer/entries-written: 7832/7832   #P:12
+  #
+  #                                _-----=> irqs-off/BH-disabled
+  #                               / _----=> need-resched
+  #                              | / _---=> hardirq/softirq
+  #                              || / _--=> preempt-depth
+  #                              ||| / _-=> migrate-disable
+  #                              |||| /     delay
+  #           TASK-PID     CPU#  |||||  TIMESTAMP  FUNCTION
+  #              | |         |   |||||     |         |
+             sleep-280073  [009] ...1. 14016.227982: ext4_release_file <-__fput
+             sleep-280073  [009] ...1. 14016.227986: ext4_release_file <-__fput
+             sleep-280073  [009] ...1. 14016.227990: ext4_release_file <-__fput
+             sleep-280073  [009] ...1. 14016.227991: ext4_release_file <-__fput
+            amixer-280074  [004] ...1. 14016.228542: ext4_getattr <-vfs_getattr_nosec
+            amixer-280074  [004] ...1. 14016.228570: ext4_file_getattr <-vfs_getattr_nosec
+            amixer-280074  [004] ...1. 14016.228571: ext4_getattr <-ext4_file_getattr
+            amixer-280074  [004] ...1. 14016.228576: ext4_file_getattr <-vfs_getattr_nosec
+#+end_src
+好了那么现在打开了tracing_on就可以进行正确的输出了。如果要关闭trace功能，可以将current_tracer设置为nop,也可以将tracing_on设置为0.
+** tracing_on
+tracing_on file将控制ring-buf 开始或者停止记录数据。
+如果current_tracer 不为nop, 即便tracing_on为0, 那么tracer仍旧发生，只不过不会进入到ringbuf当中，同样的，开销仍旧会存在。所以一个标准化的使用流程是
+#+begin_src sh
+  [tracing]# echo 0 > tracing_on
+  [tracing]# echo function_graph > current_tracer
+  [tracing]# echo 1 > tracing_on; run_test; echo 0 > tracing_on
+#+end_src
+但是有个问题，就是run_test结束之后和tracing被关闭之间存在一定的延时，这个延时很有可能导致ring-buf溢出，丢失数据等等，所以需要一个更高效的关断tracer的方法。
+** filter-tracers
+对于粗粒度的trace，这样做并不能找到正确的，符合自己预期的事件，所以我们要设置好过滤条件/函数。查看linux下自带或者说是default的配置，这大概有8w多trace项，如果不加过滤系统，那么就会很难找到自己想要的目标条件。
+#+begin_src sh
+  root@ubuntu:/sys/kernel/tracing# wc -l  available_filter_functions
+  84989 available_filter_functions
+#+end_src
+这里我们假定要ftrace一下，open系统调用，我们可以将下面所列出的trace 项加入到set_ftrace_filter文件当中。
+#+begin_src sh
+  root@ubuntu:/sys/kernel/tracing# cat available_filter_functions | grep "do_sys_open"
+  do_sys_openat2
+  do_sys_open
+#+end_src
+有意思的是，这个文件支持*通配符，这也让添加trace项变得简单。
+#+begin_src sh
+  root@ubuntu:/sys/kernel/tracing# echo "do_sys_open*" > set_ftrace_filter 
+  root@ubuntu:/sys/kernel/tracing# cat set_ftrace_filter 
+  do_sys_openat2
+  do_sys_open
+#+end_src
+** set max_graph_depth
+通过这个选项可以设置function_graph的显示级数。
+#+begin_src sh
+  root@ubuntu:/sys/kernel/tracing# cat max_graph_depth 
+  2
+#+end_src
+** designate PID
+我们也可以指定进程PID给set_ftrace_pid,这样让trace绑定到特定的进程/线程下。
+#+begin_src sh
+  root@ubuntu:/sys/kernel/tracing# cat set_ftrace_pid 
+  no pid
+#+end_src
+** designate CPU
+同样的事情，如果我们仅仅想要绑定某个CPU下面的function,trace，可以通过该路径下的tracing_cpumask进行调整。
+#+begin_src sh
+  root@ubuntu:/sys/kernel/tracing# cat tracing_cpumask 
+  ffff
+#+end_src
+** basic example
+Let us do an example of trace do_sys_open system call.
+#+begin_src sh
+ 
+#+end_src
+
+
+* trace_printk
+为什么要使用trace_printk，当我们在调试内核的时候，我们常常听到说再某一行加入printk,或者加入pr_warn,pr_info等等函数，但是在关键地段尤其是调度器内部，中断内部，网络network，他有可能会产生live-lock,是因为printk具有较大的开销。
+
+而使用trace_printk,只会将数据写入到ring-buffer当中，并且时间上只有1/10us.之后可以通过文件进行访问查看调试信息。
+#+begin_src c
+  trace_printk(" data read %ld bytes_to_read\n", bytes_to_read);
+#+end_src
+
+#+begin_src sh
+~ # cat /sys/kernel/debug/tracing/trace
+# tracer: nop
+#
+# entries-in-buffer/entries-written: 1/1   #P:1
+#
+#                                _-----=> irqs-off
+#                               / _----=> need-resched
+#                              | / _---=> hardirq/softirq
+#                              || / _--=> preempt-depth
+#                              ||| / _-=> migrate-disable
+#                              |||| /     delay
+#           TASK-PID     CPU#  |||||  TIMESTAMP  FUNCTION
+#              | |         |   |||||     |         |
+        test_app-56      [000] .....    45.928529: etx_read:  data read 1024 bytes_to_read
+
+#+end_src
+同样的，举个例子来说也可以trace-function graph.使用我们trace步骤的基本流程。
+#+begin_src sh
+~ # cat /sys/kernel/debug/tracing/trace  | grep -A 20 -B 20 "bytes_to_read"
+ 0)   7.700 us    |        update_min_vruntime();
+ 0) + 23.300 us   |      }
+ 0)   8.700 us    |      pick_next_entity();
+ 0) + 58.700 us   |    }
+ 0)               |    _raw_spin_unlock() {
+ 0)   7.600 us    |      do_raw_spin_unlock();
+ 0) + 23.400 us   |    }
+ 0) ! 197.500 us  |  }
+ 0)               |  sys_read() {
+ 0)               |    ksys_read() {
+ 0)               |      __fdget_pos() {
+ 0) + 11.000 us   |        __fget_light();
+ 0) + 29.000 us   |      }
+ 0)               |      vfs_read() {
+ 0)               |        etx_read [hello_real]() {
+ 0)               |          __might_fault() {
+ 0)               |            __might_sleep() {
+ 0)   8.000 us    |              ___might_sleep();
+ 0) + 29.600 us   |            }
+ 0) + 45.400 us   |          }
+ 0)               |          /*  data read 1024 bytes_to_read */
+#+end_src
+问题还是这个粒度太大，关短有时间延时，并且本身开启后又与程序进行了不少交互造成function-trace难找到。但是利用grep -A前N行 -B后N行进行查找可以快很多。
