@@ -121,7 +121,6 @@ Let us do an example of trace do_sys_open system call.
  
 #+end_src
 
-
 * trace_printk
 为什么要使用trace_printk，当我们在调试内核的时候，我们常常听到说再某一行加入printk,或者加入pr_warn,pr_info等等函数，但是在关键地段尤其是调度器内部，中断内部，网络network，他有可能会产生live-lock,是因为printk具有较大的开销。
 
@@ -173,3 +172,106 @@ Let us do an example of trace do_sys_open system call.
  0)               |          /*  data read 1024 bytes_to_read */
 #+end_src
 问题还是这个粒度太大，关短有时间延时，并且本身开启后又与程序进行了不少交互造成function-trace难找到。但是利用grep -A前N行 -B后N行进行查找可以快很多。
+
+* Trace_Maker
+Trace Maker可以帮助user program更好地与ftrace进行交互，并且能够快速高效地停止ftrace. 并且可以更好的trace应用程序的系统调用，这样也间接验证了open系统调用并不是调用do_sys_open而是调用do_sys_openat. Which makes it more efficiently to use and debug the kernel compared with strace.
+** trace_maker
+#+begin_src sh
+  /sys/kernel/debug/tracing # echo hello world > trace_marker
+  /sys/kernel/debug/tracing # cat trace
+  # tracer: nop
+  #
+  # entries-in-buffer/entries-written: 1/1   #P:1
+  #
+  #                                _-----=> irqs-off
+  #                               / _----=> need-resched
+  #                              | / _---=> hardirq/softirq
+  #                              || / _--=> preempt-depth
+  #                              ||| / _-=> migrate-disable
+  #                              |||| /     delay
+  #           TASK-PID     CPU#  |||||  TIMESTAMP  FUNCTION
+  #              | |         |   |||||     |         |
+  <...>-50      [000] .....    36.592596: tracing_mark_write: hello world
+#+end_src
+
+** user-program tracer setting
+#+begin_src sh
+  /app # echo 0 > /sys/kernel/debug/tracing/tracing_on 
+  /app # echo function_graph >  /sys/kernel/debug/tracing/current_tracer 
+  /app # ./simple_trace 
+  /app # cat /sys/kernel/debug/tracing/trace 
+  /sys/kernel/debug/tracing # cat per_cpu/cpu0/trace
+#+end_src
+
+这些Trace maker就像是/* */ 注释一样，可以让我们更好的标记要追踪的事物。如果有多个CPU的话，我们可以仅仅看一个CPU的trace项，这样会节省我们很多事情。
+#+begin_src sh
+  0)               |  sys_write() {
+  0)               |    ksys_write() {
+  0)               |      __fdget_pos() {
+  0)   7.000 us    |        __fget_light();
+  0) + 22.100 us   |      }
+  0)               |      vfs_write() {
+  0)               |        __might_sleep() {
+  0)   5.700 us    |          ___might_sleep();
+  0) + 17.300 us   |        }
+  0)               |        /* out of critical area we failed */
+  0) ! 108.200 us  |      }
+  0) ! 169.500 us  |    }
+  0) ! 181.800 us  |  }
+#+end_src
+
+而使用trace maker的例子如下，假设这里我们规定要有个错误出现，例如打开文件等等，如果失败就关闭trace,使其ringbuf不再增长。我们了解到，trace机制会不断的overwrite一直到出现最新的结果。
+
+#+begin_src c
+  
+  static int critical_function(void) {
+      int fd = -1;
+      fd = open(".bashrc", O_WRONLY);
+      return fd;
+  }
+  if (marker_fd >= 0)
+    write(marker_fd, "In critical area\n", 17);
+
+  if (critical_function() < 0) {
+    /* we failed! */
+    write(marker_fd, "out of critical area we failed\n", 31);
+    if (trace_fd >= 0)
+      write(trace_fd, "0", 1);
+   }
+#+end_src
+
+* Disable tracer under kernel
+为什么需要有linux kernel底下的tracing_on/off？这两个开关直接关联tracefs的tracing_on/off文件，如果linux
+下面的driver突然崩掉或者调试的时候出现休眠状态没有被唤醒，那么我们的用户程序很可能没有及时关闭trace导致buffer overflow并且追溯不到有用的bug.那么在内核当中就可以使用这两个开关，如果遇到kernel底下的问题直
+接关闭trace.
+** trace_on/off function
+#+begin_src c
+  defined in /kernel/trace/trace.c file  
+  declared in /include/linux/kernel.h file
+  /**
+   ,* tracing_on - enable tracing buffers
+   ,*
+   ,* This function enables tracing buffers that may have been
+   ,* disabled with tracing_off.
+   ,*/
+  void tracing_on(void)
+  {
+  	tracer_tracing_on(&global_trace);
+  }
+  EXPORT_SYMBOL_GPL(tracing_on);
+  /**
+   ,* tracing_off - turn off tracing buffers
+   ,*
+   ,* This function stops the tracing buffers from recording data.
+   ,* It does not disable any overhead the tracers themselves may
+   ,* be causing. This function simply causes all recording to
+   ,* the ring buffers to fail.
+   ,*/
+  void tracing_off(void)
+  {
+  	tracer_tracing_off(&global_trace);
+  }
+  EXPORT_SYMBOL_GPL(tracing_off);
+#+end_src
+
+* TODO kdump/kexec
