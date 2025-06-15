@@ -6,6 +6,20 @@
   $ --->Tracers
 #+end_src
 
+#+begin_src sh
+  CONFIG_FUNCTION_TRACER
+  CONFIG_DYNAMIC_FTRACE
+  CONFIG_FUNCTION_GRAPH_TRACER 
+#+end_src
+其中CONFIG_DYNAMIC_FTRACE作用在set_ftrace_filter和set_ftrace_notrace
+#+begin_src sh
+  /sys/kernel/debug/tracing # cat set_ftrace_notrace
+  #### no functions disabled ####
+  /sys/kernel/debug/tracing # cat set_ftrace_filter 
+  #### all functions enabled ####
+  /sys/kernel/debug/tracing # 
+#+end_src
+
 * tracefs
 这个ftrace机制，在linux-kernel中就会挂载到VFS虚拟文件系统当中，你可以通过以下命令进行查看。
 #+begin_src sh
@@ -90,12 +104,79 @@ tracing_on file将控制ring-buf 开始或者停止记录数据。
   do_sys_openat2
   do_sys_open
 #+end_src
-有意思的是，这个文件支持*通配符，这也让添加trace项变得简单。
+有意思的是，这个文件支持*通配符，这也让添加trace项变得简单。如果使用grep那么就会有比较strcmp额外开销，造成写入文件十分缓慢,推荐使用通配符的方案。note *is also used in bash, 最好加上" "。
 #+begin_src sh
   root@ubuntu:/sys/kernel/tracing# echo "do_sys_open*" > set_ftrace_filter 
   root@ubuntu:/sys/kernel/tracing# cat set_ftrace_filter 
   do_sys_openat2
   do_sys_open
+
+  value* - Select all functions that begin with value.
+  *value* - Select all functions that contain the text value.
+  *value - Select all functions that end with value. 
+#+end_src
+并且也可以通过设置内核启动参数进行设置，如果启动参数设置好了，在linux内核启动后会自动加入到相应的文件当中，note,如果两个文件同时出现相同的函数，那么notrace优先级更高。
+#+begin_src sh
+  ftrace_notrace=rcu_read_lock,rcu_read_unlock,spin_lock,spin_unlock
+  ftrace_filter=kfree,kmalloc,schedule,vmalloc_fault,spurious_fault
+#+end_src
+** particular module trace
+通过使用mod命令指定特定的模块，
+#+begin_src sh
+  [tracing]# echo ':mod:tg3' > set_ftrace_filter
+  [tracing]# cat set_ftrace_filter |head -8
+  tg3_write32
+  tg3_read32
+  tg3_write_flush_reg32
+  tw32_mailbox_flush
+  tg3_write32_tx_mbox
+  tg3_read32_mbox_5906
+  tg3_write32_mbox_5906
+  tg3_disable_ints
+#+end_src
+** command trace
+refered it from lwn.net
+#+begin_src sh
+  function:command[:count]
+  This will execute the command at the start of the function. The command is either traceon or traceoff, and an optional count can be added to have the command only execute a given number of times. If the count is left off (including the leading colon) then the command will be executed every time the function is called.
+
+  [tracing]# echo '__bad_area_nosemaphore:traceoff' > set_ftrace_filter
+  [tracing]# cat set_ftrace_filter
+  #### all functions enabled ####
+  __bad_area_nosemaphore:traceoff:unlimited
+  [tracing]# echo function > current_tracer
+
+  Notice that functions with commands do not affect the general filters. Even though a command has been added to __bad_area_nosemaphore, the filter still allowed all functions to be traced. Commands and filter functions are separate and do not affect each other. With the above command attached to the function __bad_area_nosemaphore, the next time the segmentation fault occurred, the trace stopped and contained the data I needed to debug the situation
+#+end_src
+** remove functions from the filters
+方法1 使用grep但不高效。
+#+begin_src sh
+  grep -v invert matches, select non-matching lines
+  cat set_ftrace_filter > /tmp/filter
+  grep -v lock /tmp/filter > set_ftrace_filter
+#+end_src
+方法2 使用通配符搭配！并且使用>>而不是>.
+#+begin_src sh
+  [tracing]# echo '!*lock*' >> set_ftrace_filter
+#+end_src
+但对于command来说，单纯！并不能clear,必须使用！单独命令。
+#+begin_src sh
+    [tracing]# echo 'sched*' > set_ftrace_filter
+  [tracing]# echo 'schedule:traceoff' >> set_ftrace_filter
+  [tracing]# cat trace | tail -5
+  schedule_console_callback
+  schedule_bh
+  schedule_iso_resource
+  schedule_reallocations
+  schedule:traceoff:unlimited
+  [tracing]# echo > set_ftrace_filter
+  [tracing]# cat set_ftrace_filter
+  #### all functions enabled ####
+  schedule:traceoff:unlimited
+  [tracing]# echo '!schedule:traceoff' >> set_ftrace_filter
+  [tracing]# cat set_ftrace_filter
+  #### all functions enabled ####
+  [tracing]#
 #+end_src
 ** set max_graph_depth
 通过这个选项可以设置function_graph的显示级数。
@@ -108,12 +189,100 @@ tracing_on file将控制ring-buf 开始或者停止记录数据。
 #+begin_src sh
   root@ubuntu:/sys/kernel/tracing# cat set_ftrace_pid 
   no pid
+  root@ubuntu: echo > set_ftrace_pid //clear
+#+end_src
+This will set the function tracer to only trace the bash shell that executed the echo command. 
+#+begin_src sh
+  [tracing]# echo $$ > set_ftrace_pid
+#+end_src
+Trace a specific process
+#+begin_src sh
+  [tracing]# cat ~/bin/ftrace-me
+  #!/bin/sh
+  DEBUGFS=`grep debugfs /proc/mounts | awk '{ print $2; }'`
+  echo $$ > $DEBUGFS/tracing/set_ftrace_pid
+  echo function > $DEBUGFS/tracing/current_tracer
+  exec $*
+  [tracing]# ~/bin/ftrace-me ls -ltr
 #+end_src
 ** designate CPU
 同样的事情，如果我们仅仅想要绑定某个CPU下面的function,trace，可以通过该路径下的tracing_cpumask进行调整。
 #+begin_src sh
   root@ubuntu:/sys/kernel/tracing# cat tracing_cpumask 
   ffff
+#+end_src
+** what calls a specific function
+这个选项开销很大，并且很有可能造成活锁，所以要谨慎使用，并且开关trace的顺序要注意。
+#+begin_src sh
+  /sys/kernel/debug/tracing # echo kfree > set_ftrace_filter 
+  /sys/kernel/debug/tracing # echo function > current_tracer
+  /sys/kernel/debug/tracing # echo 1 > options/func_stack_trace 
+  /sys/kernel/debug/tracing # cat trace | tail -20
+  => link_path_walk.part.0.constprop.0
+  => path_lookupat
+  => filename_lookup
+  => user_path_at_empty
+  => do_readlinkat
+  => sys_readlinkat
+  => ret_from_syscall
+  => ksys_write
+  tail-169     [000] .....  6369.369169: kfree <-kfree_link
+  tail-169     [000] .....  6369.369203: <stack trace>
+  => ftrace_call
+  => walk_component
+  => link_path_walk.part.0.constprop.0
+  => path_lookupat
+  => filename_lookup
+  => user_path_at_empty
+  => do_readlinkat
+  => sys_readlinkat
+  => ret_from_syscall
+  => ksys_write
+  /sys/kernel/debug/tracing # 
+  /sys/kernel/debug/tracing # echo 0 > options/func_stack_trace 
+  /sys/kernel/debug/tracing # echo > set_ftrace_filter 
+  /sys/kernel/debug/tracing # echo nop > current_tracer 
+
+#+end_src
+** set_graph_function
+The function_graph tracer was also explained in the previous articles, but the set_graph_function file was not described. The func_stack_trace used in the previous section can see what might call a function, but set_graph_function can be used to see what a function calls:
+#+begin_src sh
+    [tracing]# echo kfree > set_graph_function
+  [tracing]# echo function_graph > current_tracer
+  [tracing]# cat trace
+  # tracer: function_graph
+  #
+  # CPU  DURATION                  FUNCTION CALLS
+  # |     |   |                     |   |   |   |
+   0)               |  kfree() {
+   0)               |    virt_to_cache() {
+   0)               |      virt_to_head_page() {
+   0)   0.955 us    |        __phys_addr();
+   0)   2.643 us    |      }
+   0)   4.299 us    |    }
+   0)   0.855 us    |    __cache_free();
+   0)   ==========> | //means interrupt comes in
+   0)               |    smp_apic_timer_interrupt() {
+   0)               |      apic_write() {
+   0)   0.849 us    |        native_apic_mem_write();
+   0)   2.853 us    |      }
+   [tracing]# echo > set_graph_function
+#+end_src
+查看函数使用完成的accurate时间，将需要观察的函数放入到set_ftrace_filter.
+#+begin_src sh
+  [tracing]# echo smp_apic_timer_interrupt > set_ftrace_filter
+  [tracing]# echo function_graph > current_tracer
+  [tracing]# cat trace | head
+  # tracer: function_graph
+  #
+  # CPU  DURATION                  FUNCTION CALLS
+  # |     |   |                     |   |   |   |
+   1)   ==========> |
+   1) + 16.433 us   |  smp_apic_timer_interrupt();
+   1)   ==========> |
+   1) + 25.897 us   |  smp_apic_timer_interrupt();
+   1)   ==========> |
+   1) + 24.764 us   |  smp_apic_timer_interrupt();
 #+end_src
 ** basic example
 Let us do an example of trace do_sys_open system call.
@@ -274,4 +443,122 @@ Trace Maker可以帮助user program更好地与ftrace进行交互，并且能够
   EXPORT_SYMBOL_GPL(tracing_off);
 #+end_src
 
+* Ftrace_dump_on_oops
+如果在内核启动参数设置了ftrace_dump_on_oops选项，或者echo “1” > /proc/sys/kernel/ftrace_dump_on_oops. 那么当内核oops 或者 dump掉的时候会输出详细的调试信息到console上。
+#+begin_src c
+ /*
+   * ftrace_dump_on_oops - variable to dump ftrace buffer on oops
+   *
+   * If there is an oops (or kernel panic) and the ftrace_dump_on_oops
+   * is set, then ftrace_dump is called. This will output the contents
+   * of the ftrace buffers to the console.  This is very useful for
+   * capturing traces that lead to crashes and outputing it to a
+   * serial console.
+   *
+   * It is default off, but you can enable it with either specifying
+   * "ftrace_dump_on_oops" in the kernel command line, or setting
+   * /proc/sys/kernel/ftrace_dump_on_oops
+   * Set 1 if you want to dump buffers of all CPUs
+   * Set 2 if you want to dump the buffer of the CPU that triggered oops
+   */
+#+end_src
+** set boot parameter
+** shrink ftrace ringbuf
+#+begin_src sh
+  [tracing]# echo 50 > buffer_size_kb
+
+#+end_src
+  The above will shrink the Ftrace ring buffer down to 50 kilobytes per CPU.
+  You can also trigger a dump of the Ftrace buffer to the console with sysrq-z.
+** ftrace_dump
+#+begin_src c
+kernel/panic.c
+221:		ftrace_dump(DUMP_ALL);
+#+end_src
+内核oop/panic的时候会调用此函数ftrace_dump，如果我们想要在内核某个位置去dump信息，可以调用此函数，不过要注意的是此函数需要读取整个ringbuf,而一旦我们开启了trace,这个ringbuf就会被各种子系统访问，由于是共享资源，所以需要锁去访问。refered lwn.net 
+#+begin_src sh
+  Note, this may permanently disable Ftrace and a reboot may be necessary to enable it again. This is because ftrace_dump() reads the buffer. The buffer is made to be written to in all contexts (interrupt, NMI, scheduling) but the reading of the buffer requires locking. To be able to perform ftrace_dump() the locking is disabled and the buffer may end up being corrupted after the output.
+#+end_src
+* StackTrace
+Stacktrace 可以用来跟踪栈使用情况，并且stacktrace是基于函数调用的基础设施不会使用ringbuf,但是同样会使用trace的基础设施去跟踪，也就意味着，stacktrace打开时会有额外开销。
+#+begin_src sh
+  /sys/kernel/debug/tracing # echo 1 > /proc/sys/kernel/stack_tracer_enabled
+  /sys/kernel/debug/tracing # cat stack_max_size 
+  2952
+  /sys/kernel/debug/tracing # cat stack_trace
+          Depth    Size   Location    (21 entries)
+          -----    ----   --------
+    0)     3112     160   ftrace_call+0x8/0x10
+    1)     2952      80   enqueue_entity+0x70/0x662
+    2)     2872     128   enqueue_task_fair+0x76/0x422
+    3)     2744      64   ttwu_do_activate+0x66/0x104
+    4)     2680     112   try_to_wake_up+0x1ea/0x536
+    5)     2568      16   wake_up_process+0x1c/0x24
+    6)     2552      64   insert_work+0xaa/0xb4
+    7)     2488     112   __queue_work+0x154/0x450
+    8)     2376      16   delayed_work_timer_fn+0x20/0x28
+    9)     2360      64   call_timer_fn+0x2c/0x12a
+   10)     2296     208   __run_timers.part.0+0x196/0x276
+   11)     2088      32   run_timer_softirq+0x74/0x80
+   12)     2056     176   handle_softirqs+0x11a/0x31c
+   13)     1880      32   __irq_exit_rcu+0x92/0xd0
+   14)     1848      16   irq_exit+0x18/0x28
+   15)     1832      64   handle_domain_irq+0x70/0x9c
+   16)     1768      16   riscv_intc_irq+0x3e/0x66
+   17)     1752       8   ret_from_exception+0x0/0xc
+   18)     1744    1336   do_sys_poll+0x17e/0x368
+   19)      408     112   sys_ppoll+0x7a/0xc2
+   20)      296     296   ret_from_syscall+0x0/0x2
+
+#+end_src
+如果想要重新stacktrace, echo 0  > stack_max_size.
+Note: sepatate stack Linuxkernel 中断会使用额外的栈空间。stack trace会起作用吗。
+
+* Function Profiling
+You have to set up the CONFIG_FUNTION_PROFILER option.
+ If CONFIG_FUNCTION_GRAPH_TRACER is configured in the kernel, the function profiler will use the function graph infrastructure to record how long a function has been executing. If just CONFIG_FUNCTION_TRACER is configured, the function profiler will just count the functions being called.
+** option sleep_time
+函数休眠被抢占时间.
+#+begin_src sh
+ echo 0 > options/sleep-time  //close
+#+end_src
+** option graph_time
+函数被调用时间。
+#+begin_src sh
+ echo 0 > options/graph-time  //close
+#+end_src
+
+#+begin_src sh
+  [tracing]# echo nop > current_tracer
+  [tracing]# echo 1 > function_profile_enabled
+  [tracing]# cat trace_stat/function 0 |head
+    Function                               Hit    Time            Avg
+    --------                               ---    ----            ---
+    schedule                             22943    1994458706 us     86931.03 us 
+    poll_schedule_timeout                 8683    1429165515 us     164593.5 us 
+    schedule_hrtimeout_range              8638    1429155793 us     165449.8 us 
+    sys_poll                             12366    875206110 us     70775.19 us 
+    do_sys_poll                          12367    875136511 us     70763.84 us 
+    compat_sys_select                     3395    527531945 us     155384.9 us 
+    compat_core_sys_select                3395    527503300 us     155376.5 us 
+    do_select                             3395    527477553 us     155368.9 us 
+
+#+end_src
+
+#+begin_src sh
+  [tracing]# echo 0 > options/sleep-time
+  [tracing]# echo 0 > function_profile_enabled
+  [tracing]# echo 1 > function_profile_enabled
+  [tracing]# cat trace_stat/function0  | head
+    Function                               Hit    Time            Avg
+    --------                               ---    ----            ---
+    default_idle                          2493    6763414 us     2712.962 us 
+    native_safe_halt                      2492    6760641 us     2712.938 us 
+    sys_poll                              4723    714243.6 us     151.226 us  
+    do_sys_poll                           4723    692887.4 us     146.704 us  
+    sys_read                              9211    460896.3 us     50.037 us   
+    vfs_read                              9243    434521.2 us     47.010 us   
+    smp_apic_timer_interrupt              3940    275747.4 us     69.986 us   
+    sock_poll                            80613    268743.2 us     3.333 us
+#+end_src
 * TODO kdump/kexec
