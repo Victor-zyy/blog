@@ -1,4 +1,477 @@
-* Process
-* Thread
-* Scheduler
+* Linux CPU
+在arch riscv当中，current thread pointer,   由tp寄存器指定，尽管在SMP当中，每一个CPU都有一套独立的RV寄存器组，我们称之为register file. 而且每一个CPU一次只能运行一个进程或者内核线程，因此tp指向唯一，而且高效。不同的arch有不同的current的实现方式，一些RISC架构的指令集都采用这种方式，但不同于x86架构。
+#+begin_src c
 
+  struct task_struct;
+  register struct task_struct *riscv_current_is_tp __asm__("tp");
+
+  /*
+    This only works because "struct thread_info" is at offset 0 from "struct
+    task_struct".  This constraint seems to be necessary on other architectures
+    as well, but __switch_to enforces it.  We can't check TASK_TI here because
+    <asm/asm-offsets.h> includes this, and I can't get the definition of "struct
+    task_struct" here due to some header ordering problems. */
+  static __always_inline struct task_struct *get_current(void)
+  {
+  	return riscv_current_is_tp;
+  }
+
+  #define current get_current()
+  #include <asm/current.h>
+  #define current_thread_info() ((struct thread_info *)current)
+  #endif
+
+#+end_src
+** thread_info 结构
+#+begin_src c
+  
+/*
+ * low level task data that entry.S needs immediate access to
+ * - this struct should fit entirely inside of one cache line
+ * - if the members of this struct changes, the assembly constants
+ *   in asm-offsets.c must be updated accordingly
+ * - thread_info is included in task_struct at an offset of 0.  This means that
+ *   tp points to both thread_info and task_struct.
+ */
+struct thread_info {
+	unsigned long		flags;		/* low level flags */
+	int                     preempt_count;  /* 0=>preemptible, <0=>BUG */
+	/*
+	 * These stack pointers are overwritten on every system call or
+	 * exception.  SP is also saved to the stack it can be recovered when
+	 * overwritten.
+	 */
+	long			kernel_sp;	/* Kernel stack pointer */
+	long			user_sp;	/* User stack pointer */
+	int			cpu;
+};
+#+end_src
+
+* Process
+
+* Thread
+* Scheduler Outline
+在linux当中调度类每一个都在链接脚本当中添加了相关的符号。
+#+begin_src c
+  /* Defined in include/asm-generic/vmlinux.lds.h */
+  extern struct sched_class __begin_sched_classes[];
+  extern struct sched_class __end_sched_classes[];
+
+  #define sched_class_highest (__end_sched_classes - 1)
+  #define sched_class_lowest  (__begin_sched_classes - 1)
+
+  #define for_class_range(class, _from, _to)		\
+    for (class = (_from); class != (_to); class--)
+
+  #define for_each_class(class)
+    for_class_range(class, sched_class_highest, sched_class_lowest)
+
+  #define SCHED_DATA				\
+    STRUCT_ALIGN();				\
+    __begin_sched_classes = .;			\
+    *(__idle_sched_class)		        \
+    *(__fair_sched_class)			\
+    *(__dl_sched_class)			\
+    *(__stop_sched_class)			\
+     __end_sched_classes = .;
+
+  extern const struct sched_class stop_sched_class;
+  extern const struct sched_class dl_sched_class;
+  extern const struct sched_class rt_sched_class;
+  extern const struct sched_class fair_sched_class;
+  extern const struct sched_class idle_sched_class;
+#+end_src
+每一个任务也就是task在创建的时候都会被捆绑一个调度类，也就是task->sched_class成员变量，通过这个变量调度器首先会判断是否属于fair类以此来加快调度优化速度，同样的新建一个进程也会将此任务加载到相应的调度类runqueue当中,例如CFS会将此进程加入到rbtree当中，RR类就会(TODO).
+
+* CFS Scheduler
+** sched debugger setting
+- CONFIG_SCHED_DEBUG -> /proc/sched_debug or /sys/kernel/debug/sched/debug 
+- CONFIG_SCHEDSTATS     -> /proc/schedstat
+** CFS scheduler entity
+
+Small detail: on "ideal" hardware, at any time all tasks would have the same p->se.vruntime value --- i.e., tasks would execute simultaneously and no task would ever get "out of balance" from the "ideal" share of CPU time.
+
+#+begin_src c
+    // include/linux/sched.h
+    struct sched_entity {
+      /* For load-balancing: */
+      struct load_weight		load;
+      struct rb_node			run_node;
+      struct list_head		group_node;
+      unsigned int			on_rq;
+      
+      u64				exec_start;
+      u64				sum_exec_runtime;
+      u64				vruntime;
+      u64				prev_sum_exec_runtime;
+      
+      u64				nr_migrations;
+
+    #ifdef CONFIG_FAIR_GROUP_SCHED
+      int				depth;
+      struct sched_entity		*parent;
+      /* rq on which this entity is (to be) queued: */
+      struct cfs_rq			*cfs_rq;
+      /* rq "owned" by this entity/group: */
+      struct cfs_rq			*my_q;
+      /* cached value of my_q->h_nr_running */
+      unsigned long			runnable_weight;
+    #endif
+
+    #ifdef CONFIG_SMP
+  /*
+    Per entity load average tracking.
+    Put into separate cache line so it does not
+    collide with read-mostly values above.
+  ,*/
+      struct sched_avg		avg;
+  #endif
+    };
+#+end_src
+作为CFS的调度实体，其作为成员变量放入到进程实体task_struct中。
+#+begin_src c
+  struct task_struct {
+    const struct sched_class	*sched_class;
+    struct sched_entity		se;
+    struct sched_rt_entity		rt;
+    struct sched_dl_entity		dl;
+  }
+#+end_src
+
+** vruntime update
+#+begin_src c
+  /* Update the current task's runtime statistics. */
+  static void update_curr(struct cfs_rq *cfs_rq)
+  {
+    
+    struct sched_entity *curr = cfs_rq->curr;
+    // get the current time now
+    u64 now = rq_clock_task(rq_of(cfs_rq));
+    u64 delta_exec;
+
+    if (unlikely(!curr))
+      return;
+
+    // current task runs time
+    delta_exec = now - curr->exec_start;
+
+    if (unlikely((s64)delta_exec <= 0))
+      return;
+
+    // update
+    curr->exec_start = now;
+
+    curr->sum_exec_runtime += delta_exec;
+    // schedstat_add(cfs_rq->exec_clock, delta_exec); CONFIG_SCHEDSTAT
+    
+    // 根据delta_exec 计算并更新vruntime
+    curr->vruntime += calc_delta_fair(delta_exec, curr);
+    // 更新最小的min vruntime维护好CFS红黑树结构
+    update_min_vruntime(cfs_rq);
+
+    if (entity_is_task(curr)) {
+      struct task_struct *curtask = task_of(curr);
+      
+      trace_sched_stat_runtime(curtask, delta_exec, curr->vruntime);
+      cgroup_account_cputime(curtask, delta_exec);
+      account_group_exec_runtime(curtask, delta_exec);
+    }
+    
+    account_cfs_rq_runtime(cfs_rq, delta_exec);
+#+end_src
+
+** how to choose
+*** pick next entity
+#+begin_src c
+  /* Same as rb_first(), but O(1) */
+  #define rb_first_cached(root) (root)->rb_leftmost
+  struct sched_entity *__pick_first_entity(struct cfs_rq *cfs_rq)
+  {
+    struct rb_node *left = rb_first_cached(&cfs_rq->tasks_timeline);
+      
+    if (!left)
+      return NULL;
+      
+    return __node_2_se(left);
+  }
+
+  static struct sched_entity *__pick_next_entity(struct sched_entity *se)
+  {
+    struct rb_node *next = rb_next(&se->run_node);
+
+    if (!next)
+      return NULL;
+
+    return __node_2_se(next);
+  }
+#+end_src
+
+*** put entity into rbtree
+#+begin_src c
+  /* Enqueue an entity into the rb-tree: */
+  static void __enqueue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
+  {
+    rb_add_cached(&se->run_node, &cfs_rq->tasks_timeline, __entity_less);
+  }
+
+  static void __dequeue_entity(struct cfs_rq *cfs_rq, struct sched_entity *se)
+  {
+    rb_erase_cached(&se->run_node, &cfs_rq->tasks_timeline);
+  }
+#+end_src
+
+#+begin_src c
+  /**
+     rb_add_cached() - insert @node into the leftmost cached tree @tree
+     @node: node to insert
+     @tree: leftmost cached tree to insert @node into
+     @less: operator defining the (partial) node order
+   
+     Returns @node when it is the new leftmost, or NULL. */
+  static __always_inline struct rb_node *
+  rb_add_cached(struct rb_node *node, struct rb_root_cached *tree,
+  	      bool (*less)(struct rb_node *, const struct rb_node *))
+  {
+    struct rb_node **link = &tree->rb_root.rb_node;
+    struct rb_node *parent = NULL;
+    bool leftmost = true;
+
+    while (*link) {
+      parent = *link;
+      if (less(node, parent)) {
+        link = &parent->rb_left;
+      } else {
+        link = &parent->rb_right;
+        leftmost = false;
+      }
+    }
+
+    rb_link_node(node, parent, link);
+    rb_insert_color_cached(node, tree, leftmost);
+
+    return leftmost ? node : NULL;
+  }
+#+end_src
+
+** schedule
+#+begin_src c
+  //kernel/sched/core.c
+  asmlinkage __visible void __sched schedule(void)
+  {
+    struct task_struct *tsk = current;
+
+    sched_submit_work(tsk); // have no idea
+    do {
+      preempt_disable();
+      __schedule(SM_NONE);
+      sched_preempt_enable_no_resched();
+    } while (need_resched());
+    sched_update_worker(tsk);
+  }
+  EXPORT_SYMBOL(schedule);
+
+  static void __sched notrace __schedule(unsigned int sched_mode)
+  {
+    struct task_struct *prev, *next;
+    unsigned long *switch_count;
+    unsigned long prev_state;
+    struct rq_flags rf;
+    struct rq *rq;
+    int cpu;
+
+    cpu = smp_processor_id();
+
+    // get the runqueues of each cpu ?
+    rq = cpu_rq(cpu); 
+    prev = rq->curr;
+    // debug ignore
+
+    // disable local irq
+    local_irq_disable();
+
+    rq_lock(rq, &rf);
+    smp_mb__after_spinlock();
+    /* ...... */
+    next = pick_next_task(rq, prev, &rf);
+    /* ...... */
+  }
+#+end_src
+
+#+begin_src c
+  static struct task_struct *
+  pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
+  {
+    return __pick_next_task(rq, prev, rf);
+  }
+#+end_src
+struct rq
+/*
+ * This is the main, per-CPU runqueue data structure.
+ *
+ * Locking rule: those places that want to lock multiple runqueues
+ * (such as the load balancing or the thread migration code), lock
+ * acquire operations must be ordered by ascending &runqueue.
+ */
+#+begin_src c
+    
+  /* Pick up the highest-prio task: */
+  static inline struct task_struct *
+  __pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
+  {
+    const struct sched_class *class;
+    struct task_struct *p;
+
+    /*
+     ,* Optimization: we know that if all tasks are in the fair class we can
+     ,* call that function directly, but only if the @prev task wasn't of a
+     ,* higher scheduling class, because otherwise those lose the
+     ,* opportunity to pull in more work from other CPUs.
+     ,*/
+    if (likely(prev->sched_class <= &fair_sched_class &&
+  	     rq->nr_running == rq->cfs.h_nr_running)) {
+
+      p = pick_next_task_fair(rq, prev, rf);
+      if (unlikely(p == RETRY_TASK))
+        goto restart;
+
+      return p;
+    }
+
+   restart:
+    put_prev_task_balance(rq, prev, rf);
+
+    for_each_class(class) {
+      p = class->pick_next_task(rq);
+      if (p)
+        return p;
+    }
+
+  }
+#+end_src
+
+
+#+begin_src c
+
+#+end_src
+
+
+
+** smp id
+include/linux/smp.h
+#+begin_src c
+      :c:func:`smp_processor_id()`
+      ----------------------------
+
+      Defined in ``include/linux/smp.h``
+
+      :c:func:`get_cpu()` disables preemption (so you won't suddenly get
+      moved to another CPU) and returns the current processor number, between
+      0 and ``NR_CPUS``. Note that the CPU numbers are not necessarily
+      continuous. You return it again with :c:func:`put_cpu()` when you
+      are done.
+
+      If you know you cannot be preempted by another task (ie. you are in
+      interrupt context, or have preemption disabled) you can use
+
+    #define get_cpu()		({ preempt_disable(); __smp_processor_id(); })
+    #define put_cpu()		preempt_enable()
+#+end_src
+
+#+begin_src c
+  #define raw_smp_processor_id() (current_thread_info()->cpu)
+  ->smp_processor_id()
+    ->__smp_processor_id() / debug_smp_processor_id() 
+     ->raw_smp_processor_id() // defined in arch/riscv/include/asm/smp.h
+#+end_src
+
+** percpu variable
+#+begin_src c
+    #define PER_CPU_BASE_SECTION ".data..percpu"
+    #define __percpu
+
+    DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
+
+    #define DEFINE_PER_CPU_SHARED_ALIGNED(type, name)			
+    DEFINE_PER_CPU_SECTION(type, name, PER_CPU_SHARED_ALIGNED_SECTION)
+      ____cacheline_aligned_in_smp
+          
+    #define DEFINE_PER_CPU_SECTION(type, name, sec)	\
+      __PCPU_ATTRS(sec) __typeof__(type) name
+
+    #define __PCPU_ATTRS(sec)						
+      __percpu __attribute__((section(PER_CPU_BASE_SECTION sec)))
+      PER_CPU_ATTRIBUTES
+
+    /* Normal declaration and definition macros. */ 
+    #define DECLARE_PER_CPU_SECTION(type, name, sec)	\
+      extern __PCPU_ATTRS(sec) __typeof__(type) name
+
+      --> __PCPU_ATTRS("..shared_aligned") __typeof__(struct rq) runqueues
+      --> __percpu __attribute__((section(".data..percpu..shared_aligned")) __typeof__(struct rq) runqueues
+
+#+end_src
+
+runqueues 被定义成为一个全局变量，使用gdb + qemu进行调试发现直接使用p命令即可成功得到该变量的地址,但是per_cpu变量应该是每一个cpu独有的，所以linux kernel作了加offset的操作，使得SMP当中每一个CPU都得到这么一个变量。类似于全局变量的用法。
+#+begin_src c
+  --> runqueues defined in a particular section.
+    
+  (gdb) p &runqueues 
+  $6 = (struct rq *) 0xffffffff8084bd80 <runqueues>
+  // check the section with objdump command
+  .data..percpu 0000fc58  ffffffff8083d000  000000000083d000  0066f000  2**6
+
+  >>> hex(int(0xffffffff8084bd80) +  int(0xffffffe0bf5a1000))
+  '0x1ffffffe03fdecd80'
+  '0xffffffe03fdecd80'
+
+  (gdb) p/x &runqueues 
+  $15 = 0xffffffff8084bd80
+  (gdb) p/x rq
+  $16 = 0xffffffe03fdecd80
+  (gdb) p/x __per_cpu_offset 
+  $17 = {0xffffffe0bf556000, 0xffffffe0bf56f000, 0xffffffe0bf588000, 
+    0xffffffe0bf5a1000, 0x0, 0x0, 0x0, 0x0}
+#+end_src
+
+#+begin_src c
+  // assuming cpuid is 0
+  #define cpu_rq(cpu)		(&per_cpu(runqueues, (cpu)))
+  #define per_cpu(var, cpu)	(*per_cpu_ptr(&(var), cpu))
+  #define per_cpu_ptr(ptr,cpu)
+  ({
+    __verify_pcpu_ptr(ptr);	// verify the parameter
+    SHIFT_PERCPU_PTR((ptr), per_cpu_offset((cpu)));
+   })
+
+  #define SHIFT_PERCPU_PTR(__p, __offset)
+  RELOC_HIDE((typeof(*(__p)) __kernel __force *)(__p), (__offset))
+        
+  extern unsigned long __per_cpu_offset[NR_CPUS]; //defined in mm/percpu.c
+  #define per_cpu_offset(x) (__per_cpu_offset[x])
+#+end_src
+以上便是计算offset的实际过程，我通过分析，浅显的认为是这样的通过全局数组记录per_cpu偏移，然后通过声明一个全局变量runqueues使得每一个CPU都得到了自己的一份独一无二的变量，而且这个变量是通过offset相加得到的。
+** per_cpu_offset
+per_cpu_offset
+#+begin_src c
+void __init setup_per_cpu_areas(void)
+{
+	unsigned long delta;
+	unsigned int cpu;
+	int rc;
+
+	/*
+	 * Always reserve area for module percpu variables.  That's
+	 * what the legacy allocator did.
+	 */
+	rc = pcpu_embed_first_chunk(PERCPU_MODULE_RESERVE,
+				    PERCPU_DYNAMIC_RESERVE, PAGE_SIZE, NULL,
+				    pcpu_dfl_fc_alloc, pcpu_dfl_fc_free);
+	if (rc < 0)
+		panic("Failed to initialize percpu areas.");
+
+	delta = (unsigned long)pcpu_base_addr - (unsigned long)__per_cpu_start;
+	for_each_possible_cpu(cpu)
+		__per_cpu_offset[cpu] = delta + pcpu_unit_offsets[cpu];
+}
+#+end_src
+* 

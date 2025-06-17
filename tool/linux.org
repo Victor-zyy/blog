@@ -17,3 +17,19 @@
 #+end_src
 *** double click
 
+** see disk usage
+#+begin_src sh
+  df -h
+  Filesystem      Size  Used Avail Use% Mounted on
+  tmpfs           1.5G  3.7M  1.5G   1% /run
+  /dev/nvme0n1p3  156G   51G   97G  35% /
+  tmpfs           7.5G     0  7.5G   0% /dev/shm
+  tmpfs           5.0M  4.0K  5.0M   1% /run/lock
+  efivarfs        148K   84K   60K  59% /sys/firmware/efi/efivars
+  tmpfs           7.5G     0  7.5G   0% /run/qemu
+  /dev/nvme0n1p4  297G  227G   56G  81% /home
+  /dev/nvme0n1p1  485M  6.1M  478M   2% /boot/efi
+
+  du -sh .
+  18G	.
+#+end_src

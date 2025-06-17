@@ -8,6 +8,8 @@
   $ cd qemu-opensbi/
   $ export CROSS_COMPILE=riscv64-linux-gnu-
   $ make all PLATFORM=generic PLATFORM_RISCV_XLEN=64
+  $ make ARCH=riscv CROSS_COMPILE=riscv64-linux-gnu- PLATFORM=generic menuconfig
+  $ Disable Semihosting which helps us in debug mode with qemu
 #+end_src
 
 #+begin_src sh
