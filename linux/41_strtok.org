@@ -1,0 +1,80 @@
+* Strtok function usage
+
+#+begin_src c
+ strtok, strtok_r - extract tokens from strings
+
+ #include <string.h>
+
+ char *strtok(char *str, const char *delim);
+
+ char *strtok_r(char *str, const char *delim, char **saveptr);
+#+end_src
+
+
+这个函数就是将字符串按照delim分开。
+#+begin_src c
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+int
+main(int argc, char *argv[])
+{
+	char *str1, *str2, *token, *subtoken;
+	char *saveptr1, *saveptr2;
+	
+	if (argc != 4) {
+		fprintf(stderr, "Usage: %s string delim subdelim\n",
+			argv[0]);
+		exit(EXIT_FAILURE);
+	}
+
+	str1 = argv[1];
+	for (int j = 1; ; j++, str1 = NULL) {
+		token = strtok_r((char *)str1, argv[2], &saveptr1);
+		if (token == NULL)
+			break;
+		printf("%d: %s\n", j, token);
+
+		for (str2 = token; ; str2 = NULL) {
+			subtoken = strtok_r((char *)str2, argv[3], &saveptr2);
+			if (subtoken == NULL)
+				break;
+			printf(" --> %s\n", subtoken);
+		}
+	}
+	exit(EXIT_SUCCESS);
+}
+#+end_src
+上面这段程序可以根据delim和subdelim将字符串分开，并依次进行输出。
+#+begin_src
+$ ./a.out 'a/bbb///cc;xxx:yyy:' ':;' '/'
+           1: a/bbb///cc
+                    --> a
+                    --> bbb
+                    --> cc
+           2: xxx
+                    --> xxx
+           3: yyy
+                    --> yyy
+#+end_src
+
+for loop一个陷阱
+#+begin_src c
+  char *str1 = argv[1];
+  for (int j = 1, str1 = argv[1]; ; j++, str1 = NULL)
+  	....
+#+end_src
+即便上面的str1已经定义了，for-loop初始化当中仍然会定义一个int变量str1,导致程序报错。
+
+#+begin_src
+  strtok.c:23:25: warning: implicit declaration of function ‘strtok_r’; did you mean ‘strtok’? [-Wimplicit-function-declaration]
+   23 |                 token = strtok_r((char *)str1, argv[2], &saveptr1);
+      |                         ^~~~~~~~
+      |                         strtok
+strtok.c:23:23: warning: assignment to ‘char *’ from ‘int’ makes pointer from integer without a cast [-Wint-conversion]
+   23 |                 token = strtok_r((char *)str1, argv[2], &saveptr1);
+      |                       ^
+strtok.c:29:34: warning: assignment to ‘char *’ from ‘int’ makes pointer from integer without a cast [-Wint-conversion]
+   29 |                         subtoken = strtok_r((char *)str2, argv[3], &saveptr2);
+#+end_src

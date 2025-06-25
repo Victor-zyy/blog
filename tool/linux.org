@@ -33,3 +33,27 @@
   du -sh .
   18G	.
 #+end_src
+
+** proc/loadavg
+#+begin_src sh
+$ cat /proc/loadavg 
+1.54 1.24 1.02 1/1409 383260
+#+end_src
+This VFS file shows up that 1min, 5min, or 15min average load of our System, The fourth field is composed by the running entity slash available entity, last field is for the recently created task PID.
+
+** calculate the lines of code
+#+begin_src sh
+    cloc  *.c
+    zyy@ubuntu:~/repo/cs_learn/c_plus_plus$ cloc stl_test.cc
+         1 text file.
+         1 unique file.                              
+         0 files ignored.
+
+  github.com/AlDanial/cloc v 1.90  T=0.01 s (97.1 files/s, 64266.4 lines/s)
+  -------------------------------------------------------------------------------
+  Language                     files          blank        comment           code
+  -------------------------------------------------------------------------------
+  C++                              1             76             80            506
+  -------------------------------------------------------------------------------
+
+#+end_src

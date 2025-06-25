@@ -48,7 +48,224 @@ struct thread_info {
 #+end_src
 
 * Process
+#+begin_src c
+  {
+    struct kernel_clone_args args = {
+      .flags		= (lower_32_bits(clone_flags) & ~CSIGNAL),
+      .pidfd		= parent_tidptr,
+      .child_tid	= child_tidptr,
+      .parent_tid	= parent_tidptr,
+      .exit_signal	= (lower_32_bits(clone_flags) & CSIGNAL),
+      .stack		= newsp,
+      .tls		= tls,
+    };
 
+    return kernel_clone(&args);
+  }
+#+end_src
+fork ->from user layer
+    sys_clone->
+     kernel_clone->
+     copy_process
+      sched_cgroup_fork
+** stack exchange 
+ 如果是用户态->内核态 进行栈切换
+ 如果是内核态->内核态 不进行栈切换始终使用内核栈
+ Linux Kernel 使用sscratch进行栈切换。具体做法就是如果csr sscratch是0那么代表来自内核，如果非零代表来自用户态。如果是来自用户态，那么保存上下文到内核栈上，这就需要进行栈帧的切换，由于riscv不像ARM那样多个模式有多个栈指针，所以使用riscv只有一个sp,因此要做到用户栈和内核栈互不干扰。
+#+begin_src asm
+   	
+ENTRY(handle_exception)
+	/*
+	 * If coming from userspace, preserve the user thread pointer and load
+	 * the kernel thread pointer.  If we came from the kernel, the scratch
+	 * register will contain 0, and we should continue on the current TP.
+	 */;FIXME: tp  thread pointer sscratch not zero
+	csrrw tp, CSR_SCRATCH, tp
+	bnez tp, _save_context
+
+_restore_kernel_tpsp:
+	csrr tp, CSR_SCRATCH
+	REG_S sp, TASK_TI_KERNEL_SP(tp)
+#+end_src
+** thread_info
+thread_info 是arch相关的，因此thread_info被定义在了arch/riscv/include/asm/thread_info.h,我们可以清楚的看到，有kernel栈帧和user栈帧。前面也已经提到过，thread_info就被存储到了tp 寄存器当中，这个也是arch相关的，不同的体系结构处理这个结构体的方式不同。
+#+begin_src c
+/*
+ * low level task data that entry.S needs immediate access to
+ * - this struct should fit entirely inside of one cache line
+ * - if the members of this struct changes, the assembly constants
+ *   in asm-offsets.c must be updated accordingly
+ * - thread_info is included in task_struct at an offset of 0.  This means that
+ *   tp points to both thread_info and task_struct.
+ */
+struct thread_info {
+	unsigned long		flags;		/* low level flags */
+	int                     preempt_count;  /* 0=>preemptible, <0=>BUG */
+	/*
+	 * These stack pointers are overwritten on every system call or
+	 * exception.  SP is also saved to the stack it can be recovered when
+	 * overwritten.
+	 */
+	long			kernel_sp;	/* Kernel stack pointer */
+	long			user_sp;	/* User stack pointer */
+	int			cpu;
+};
+ #+end_src
+** save context on kernel stack
+#+begin_src asm
+  REG_S sp, TASK_TI_USER_SP(tp)
+  REG_L sp, TASK_TI_KERNEL_SP(tp)
+  addi sp, sp, -(PT_SIZE_ON_STACK)
+  // ;FIXME: x2-> sp
+  //         x4-> tp
+  REG_S x1,  PT_RA(sp)
+  //........
+
+  REG_S s0, PT_SP(sp)  // x2 user-level stack
+  REG_S s1, PT_STATUS(sp)
+  REG_S s2, PT_EPC(sp)
+  REG_S s3, PT_BADADDR(sp)
+  REG_S s4, PT_CAUSE(sp)
+  REG_S s5, PT_TP(sp)
+  /*
+  * Set the scratch register to 0, so that if a recursive exception
+  * occurs, the exception vector knows it came from the kernel
+  */
+  csrw CSR_SCRATCH, x0
+#+end_src
+** exception or interrupt 
+异常也就是中断只不过是同步中断，riscv体系结构把异常和中断进行区分开，通过在scause当中的63bit进行区别，如果是0代表异常，如果是1代表中断。而LinuxKernel当中对异常和中断进行分别处理，这就需要首先要判断进入的是异常还是中断，例如syscall就是异常,hardirq like 定时器就是中断。
+#+begin_src asm
+  csrr s4, CSR_CAUSE
+  /*
+   * MSB of cause differentiates between
+   * interrupts and exceptions
+   */
+  bge s4, zero, 1f
+#+end_src
+Linux kernel 处理的非常巧妙，因为最高位代表着符号位，如果小于0代表中断，大于0代表异常。
+** handler exception
+在Linuxkernel当中，首先会判断是否是系统调用也就是scause编号是否为8,如果不为8，那么可能是其他的exceptions像AMO,缺页，未对齐等等，LinuxKernel提供一种方式通过将除了系统调用外的异常设置到一个异常向量表当中，通过scause << RISCV_LGPTR(aka 8)进行指定然后跳转，并且要注意对齐问题。
+#+begin_src asm
+  la ra, ret_from_exception
+  /* Handle syscalls */
+  li t0, EXC_SYSCALL // ecall 8
+  beq s4, t0, handle_syscall
+
+  /* Handle other exceptions */
+  slli t0, s4, RISCV_LGPTR
+  la t1, excp_vect_table
+  la t2, excp_vect_table_end
+  move a0, sp /* pt_regs */
+  add t0, t1, t0
+  /* Check if exception code lies within bounds */
+  bgeu t0, t2, 1f
+  REG_L t0, 0(t0)
+  jr t0
+#+end_src
+** handle syscall
+Linux Kernel处理SystemCall流程如下，首先暂存orig a0以备后面使用，然后将spec += 4原因在于ecall指令返回应该执行下一条指令而不是继续执行产生异常的指令，这个和pagefault有明显的区别。然后检查syscall num（a7)是否超过了系统调用的表如果超过了就执行sys_ni_syscall只是一个无效的系统调用，如果在系统调用符号表内部，那么就根据系统调用号移位作为偏移加上__NR_syscalls基地址进行跳转。
+#+begin_src asm
+    	/* save the initial A0 value (needed in signal handlers) */
+    	REG_S a0, PT_ORIG_A0(sp)
+    	/*
+    	Advance SEPC to avoid executing the original
+    	scall instruction on sret */
+    	addi s2, s2, 0x4
+    	REG_S s2, PT_EPC(sp)
+    	/* Trace syscalls, but only if requested by the user. */ 
+    	// thread_info -> flags
+    	REG_L t0, TASK_TI_FLAGS(tp)
+    	andi t0, t0, _TIF_SYSCALL_WORK
+    	bnez t0, handle_syscall_trace_enter
+  check_syscall_nr:
+    	/* Check to make sure we don't jump to a bogus syscall number. */
+     	li t0, __NR_syscalls
+     	la s0, sys_ni_syscall
+     	/*
+     	Syscall number held in a7.
+     	If syscall number is above allowed value, redirect to ni_syscall. */
+     	bgeu a7, t0, 1f
+     	/* Call syscall */
+     	la s0, sys_call_table
+     	slli t0, a7, RISCV_LGPTR // 8byte 地址
+     	add s0, s0, t0
+     	REG_L s0, 0(s0)
+  1:
+     	jalr s0
+#+end_src
+** exception ret
+在异常中返回时，首先要关闭中断，然后进行返回操作，确保后续操作的本地原子性。
+判断进入异常上下文之前的模式是U还是S,如果是S那么进入resume_kernel,进入中断是U那么resume_userspace
+最后保存sp到thread_info当中，然后thread_info仍然保存到sscratch当中以便下次再遇到异常的时候进入异常上下文可以找到内核的数据结构。
+最后恢复上下文restore_all，进入到之前的状态通过sret指令。
+注意这里使用了LC/SD指令，保留加载和条件存储指令，不太明白意义为何？
+#+begin_src asm
+    SYM_CODE_START_NOALIGN(ret_from_exception)
+    	REG_L s0, PT_STATUS(sp)
+    	csrc CSR_STATUS, SR_IE // clear interrupt
+    	andi s0, s0, SR_SPP // judge when trapped into kernel the mode S or U
+    	bnez s0, resume_kernel
+    SYM_CODE_END(ret_from_exception)
+
+    resume_userspace:
+    	/* Interrupts must be disabled here so flags are checked atomically*/
+    	REG_L s0, TASK_TI_FLAGS(tp) /* current_thread_info->flags */
+    	andi s1, s0, _TIF_WORK_MASK
+    	bnez s1, work_pending
+
+    	/* Save unwound kernel stack pointer in thread_info */
+    	addi s0, sp, PT_SIZE_ON_STACK
+    	REG_S s0, TASK_TI_KERNEL_SP(tp)
+
+    	/*
+    	Save TP into the scratch register , so we can find the kernel data
+    	structures again. */
+    	csrw CSR_SCRATCH, tp
+restore_all:
+
+#+end_src
+
+
+#+begin_src c
+  fork
+    -> handler_exception (ecall 异常)
+      -> 
+#+end_src
+
+* Syscall Table
+sys_call_table是体系结构相关的，并且该系统调用表即是Linuxkernel与用户层调用的唯一接口，下面我们看一下Linuxkerenl针对riscv-arch如何进行系统调用表的处理的。这张表的构成就是调用号对应sys_xx函数。
+#+begin_src c
+  // arch/riscv/kernel/syscall_table.c
+  void * const sys_call_table[__NR_syscalls] = {
+    [0 ... __NR_syscalls - 1] = sys_ni_syscall,
+  #include <asm/unistd.h>
+  };
+
+  // arch/riscv/include/asm/unistd.h
+  #define __ARCH_WANT_SYS_CLONE
+  #include <uapi/asm/unistd.h>
+  #define NR_syscalls (__NR_syscalls)
+
+  // arch/riscv/include/uapi/asm/unistd.h
+  #ifdef __LP64__ // arch ia64
+  #define __ARCH_WANT_NEW_STAT
+  #define __ARCH_WANT_SET_GET_RLIMIT
+  #endif /* __LP64__ */
+
+  #define __ARCH_WANT_SYS_CLONE3
+  #define __ARCH_WANT_MEMFD_SECRET
+
+  #include <asm-generic/unistd.h>
+  #ifndef __NR_riscv_flush_icache
+  #define __NR_riscv_flush_icache (__NR_arch_specific_syscall + 15)
+  #endif
+  __SYSCALL(__NR_riscv_flush_icache, sys_riscv_flush_icache)
+    
+  //include/uapi/asm-generic/unistd.h
+  #define __NR_clone3 435
+    __SYSCALL(__NR_clone3, sys_clone3)
+#+end_src
 * Thread
 * Scheduler Outline
 在linux当中调度类每一个都在链接脚本当中添加了相关的符号。
@@ -92,49 +309,45 @@ struct thread_info {
 Small detail: on "ideal" hardware, at any time all tasks would have the same p->se.vruntime value --- i.e., tasks would execute simultaneously and no task would ever get "out of balance" from the "ideal" share of CPU time.
 
 #+begin_src c
-    // include/linux/sched.h
-    struct sched_entity {
-      /* For load-balancing: */
-      struct load_weight		load;
-      struct rb_node			run_node;
-      struct list_head		group_node;
-      unsigned int			on_rq;
+  // include/linux/sched.h
+  struct sched_entity {
+    /* For load-balancing: */
+    struct load_weight		load;
+    struct rb_node			run_node;
+    struct list_head		group_node;
+    unsigned int			on_rq;
       
-      u64				exec_start;
-      u64				sum_exec_runtime;
-      u64				vruntime;
-      u64				prev_sum_exec_runtime;
+    u64				exec_start;
+    u64				sum_exec_runtime;
+    u64				vruntime;
+    u64				prev_sum_exec_runtime;
       
-      u64				nr_migrations;
+    u64				nr_migrations;
 
-    #ifdef CONFIG_FAIR_GROUP_SCHED
-      int				depth;
-      struct sched_entity		*parent;
-      /* rq on which this entity is (to be) queued: */
-      struct cfs_rq			*cfs_rq;
-      /* rq "owned" by this entity/group: */
-      struct cfs_rq			*my_q;
-      /* cached value of my_q->h_nr_running */
-      unsigned long			runnable_weight;
-    #endif
-
-    #ifdef CONFIG_SMP
-  /*
-    Per entity load average tracking.
-    Put into separate cache line so it does not
-    collide with read-mostly values above.
-  ,*/
-      struct sched_avg		avg;
-  #endif
-    };
+    int				depth;
+    struct sched_entity		*parent;
+    /* rq on which this entity is (to be) queued: */
+    struct cfs_rq			*cfs_rq;
+    /* rq "owned" by this entity/group: */
+    struct cfs_rq			*my_q;
+    /* cached value of my_q->h_nr_running */
+    unsigned long			runnable_weight;
+    /**
+      Per entity load average tracking.
+      Put into separate cache line so it does not
+      collide with read-mostly values above. **/
+    struct sched_avg		avg;
+  };
 #+end_src
 作为CFS的调度实体，其作为成员变量放入到进程实体task_struct中。
 #+begin_src c
   struct task_struct {
+    .......
     const struct sched_class	*sched_class;
     struct sched_entity		se;
     struct sched_rt_entity		rt;
     struct sched_dl_entity		dl;
+    .......
   }
 #+end_src
 
@@ -297,23 +510,10 @@ Small detail: on "ideal" hardware, at any time all tasks would have the same p->
   }
 #+end_src
 
+** pick_next_task
 #+begin_src c
-  static struct task_struct *
-  pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
-  {
-    return __pick_next_task(rq, prev, rf);
-  }
-#+end_src
-struct rq
-/*
- * This is the main, per-CPU runqueue data structure.
- *
- * Locking rule: those places that want to lock multiple runqueues
- * (such as the load balancing or the thread migration code), lock
- * acquire operations must be ordered by ascending &runqueue.
- */
-#+begin_src c
-    
+  ->pick_next_task
+   ->__pick_next_task
   /* Pick up the highest-prio task: */
   static inline struct task_struct *
   __pick_next_task(struct rq *rq, struct task_struct *prev, struct rq_flags *rf)
@@ -322,11 +522,10 @@ struct rq
     struct task_struct *p;
 
     /*
-     ,* Optimization: we know that if all tasks are in the fair class we can
-     ,* call that function directly, but only if the @prev task wasn't of a
-     ,* higher scheduling class, because otherwise those lose the
-     ,* opportunity to pull in more work from other CPUs.
-     ,*/
+     Optimization: we know that if all tasks are in the fair class we can
+     call that function directly, but only if the @prev task wasn't of a
+     higher scheduling class, because otherwise those lose the
+     opportunity to pull in more work from other CPUs. */
     if (likely(prev->sched_class <= &fair_sched_class &&
   	     rq->nr_running == rq->cfs.h_nr_running)) {
 
@@ -340,6 +539,8 @@ struct rq
    restart:
     put_prev_task_balance(rq, prev, rf);
 
+    // from the highest prio class (STOP_SCHED_CLASS -> IDLE_SCHED_CLASS)
+    // defined in RO_DATA section in vmlinux.lds.S
     for_each_class(class) {
       p = class->pick_next_task(rq);
       if (p)
@@ -349,12 +550,51 @@ struct rq
   }
 #+end_src
 
-
+** struct rq
+为什么需要rq,变量，每一个cpu都有rq吗，rq到底是如何起作用的？
 #+begin_src c
+      
+  /**
+     This is the main, per-CPU runqueue data structure.
+     Locking rule: those places that want to lock multiple runqueues
+     (such as the load balancing or the thread migration code), lock
+     acquire operations must be ordered by ascending &runqueue. **/
 
+  struct rq {
+    /*...... */
+    /* runqueue lock: */
+    raw_spinlock_t		__lock;
+    struct cfs_rq		cfs;
+    struct rt_rq		rt;
+    struct dl_rq		dl;
+
+    struct task_struct __rcu	*curr;
+    struct task_struct	*idle;
+    struct task_struct	*stop;
+    /*...... */
+  }
+#+end_src
+#+begin_src c
+  DEFINE_SCHED_CLASS(stop) = {
+
+    .enqueue_task		= enqueue_task_stop,
+    .dequeue_task		= dequeue_task_stop,
+    .yield_task		= yield_task_stop,
+
+    .check_preempt_curr	= check_preempt_curr_stop,
+
+    .pick_next_task		= pick_next_task_stop,
+    .put_prev_task		= put_prev_task_stop,
+    .set_next_task          = set_next_task_stop,
+  }
 #+end_src
 
-
+#+begin_src c
+  -->sched_class->pick_next_task(rq)
+    -->pick_next_task_stop(rq)
+      -->pick_task_stop(rq)
+        -->
+#+end_src
 
 ** smp id
 include/linux/smp.h
@@ -474,4 +714,19 @@ void __init setup_per_cpu_areas(void)
 		__per_cpu_offset[cpu] = delta + pcpu_unit_offsets[cpu];
 }
 #+end_src
-* 
+* Question
+** nested interrupt
+中断会嵌套吗，如果会什么时候，RISCV体系结构当中把中断SIE/MIE状态保存到SPIE/MPIE状态，MIE设置为0,那么linux内部如何做到的。
+Answer: Linux 即根据SPIE状态进行开启或者关闭中断，当在异常上下文当中执行时。但是Linux的kprobe使用ebreak断点中断进行触发，需要在异常上下文当中关闭中断。
+#+begin_src asm
+  andi t0, s1, SR_PIE
+  beqz t0, 1f
+  /* kprobes, entered via ebreak, must have interrupts disabled. */
+  li t0, EXC_BREAKPOINT
+  beq s4, t0, 1f
+  csrs CSR_STATUS, SR_IE
+1:
+#+end_src
+
+** thread_info
+Tp寄存器指向thread_info这是公认的事实，但是thread_info是每一个线程独有还是CPU处理器独有的呢？Linuxkerenl是如何解决的呢?
