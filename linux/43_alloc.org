@@ -1,0 +1,88 @@
+* AllocMemory Usage
+
+** typical usage
+malloc and free
+- static_cast
+- appear in pair
+
+#+begin_src c
+  
+  char * str = (char *)malloc(NUM_BYTE);
+
+  memset(str, 0 , NUM_BYTE);
+
+  // ... do staff
+
+  free(str);
+#+end_src
+
+** calloc
+这个函数与malloc类似，只不过将初始化加入其中，并且传入的参数不再是单一的尺寸。
+
+#+begin_src c
+  int * integer = (int *)calloc(NUM_BYTE, sizeof(int));
+
+  // ... do staff
+
+  free(integer);
+#+end_src
+
+** realloc/reallocarray
+函数含义如其名称，使用场景是当我们的内存不够用时，便会调用此函数将我们的内存增加，注意这个函数返回的内存仍然是连续的，如果之前pointer指向的元素位置被改变了，那么之前的内存会自动调用free被释放。
+
+另外，realloc和reallocarray保持原来的内存内容不改变，但是reallocarray比较安全，他会保证即便增长内存失败之前的内存内容仍旧能够使用，将全局变量errno设置ENONMEM.
+
+realloc特例
+如果ptr为NULL此函数就相当于malloc
+如果ptr不为NULL，size为0,此函数相当于free
+如果ptr不为null，size不为0,那么ptr一定要是之前使用过malloc,calloc,realloc等返回的地址，否则会出错。
+
+#+begin_src c
+  
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+
+#if 0
+void *malloc(size_t size);
+void free(void *ptr);
+void *calloc(size_t nmemb, size_t size);
+void *realloc(void *ptr, size_t size);
+void *reallocarray(void *ptr, size_t nmemb, size_t size);
+#endif
+
+
+#define NUM_BYTE 1024
+int main(int argc, char *argv[]) {
+	char * str = (char *)malloc(NUM_BYTE);
+
+	memset(str, 0 , NUM_BYTE);
+
+	// ... do staff
+
+	free(str);
+
+
+	int * integer = (int *)calloc(NUM_BYTE, sizeof(int));
+
+	// ... do staff
+
+	free(integer);
+
+
+	char * mem_old = (char *)malloc(NUM_BYTE);
+	for (int i = 0; i < NUM_BYTE; ++i) {
+		mem_old[i] = 'x';
+	}
+	// not enough
+	char * mem_new = realloc(mem_old, 1048);
+	for (int i = NUM_BYTE; i < 1028; ++i) {
+		printf("mem_old[%d] : %c\n", i - NUM_BYTE, mem_new[i - NUM_BYTE]);
+		printf("mem_new[%d] : %c\n", i, mem_new[i]);
+	}
+
+	free(mem_new);
+
+	return 0;
+}
+#+end_src

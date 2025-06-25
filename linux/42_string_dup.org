@@ -1,0 +1,93 @@
+* String Duplicate Operations
+
+#+begin_src c
+  #include <string.h>
+
+  char *strdup(const char *s);
+  char *strndup(const char *s, size_t n);
+  char *strdupa(const char *s);
+  char *strndupa(const char *s, size_t n);
+#+end_src
+** strdup
+The  strdup()  function returns a pointer to a new string which is a duplicate of the string s.  Memory for the new  string  is obtained with malloc(3), and can be freed with free(3).
+
+strdup 会在heap区分配内存，分配后的内存可以直接使用free进行释放，在做一些添加操作的时候可以方便的进行dup操作。
+
+#+begin_src c
+  int main() {
+  	const char * str = "XD-zynexOS";
+
+  	char *dupstr = strdup(str);
+
+  	printf("address of str[1] : %p\n", &str[1]);
+  	printf("address of dupstr[1] : %p\n", &dupstr[1]);
+
+  	free(dupstr);
+  	return 0;
+  }
+#+end_src
+此例子将会出现下面的输出。可以明确的判断出两个字符串的地址不相同，一个在readonly区，另一个在heap区。
+#+begin_src
+./a.out
+address of str[1] : 0x55ef10acc005
+address of dupstr[1] : 0x55ef4c3952a1
+
+$ valgrind  ./a.out
+==271073== Command: ./a.out
+==271073== 
+address of str[1] : 0x10a005
+address of dupstr[1] : 0x4aa4041
+==271073== 
+==271073== HEAP SUMMARY:
+==271073==     in use at exit: 0 bytes in 0 blocks
+==271073==   total heap usage: 2 allocs, 2 frees, 1,035 bytes allocated
+==271073== 
+#+end_src
+
+
+The  strndup() function is similar, but copies at most n bytes. If s is longer than n, only n bytes are copied, and a terminating null byte ('\0') is added.
+
+strndup操作相似，但会dup至多nbytes,如果s字符串长度大于n,那么至多dup nbytes并在尾部添加“\0".
+
+** strdupa
+strdupa and strndupa这两套函数会使用alloca进行分配内存，此内存函数会自动释放内存，原理在与其内存分配函数使用在stack上进行分配。
+
+ The  alloca()  function  allocates  size  bytes of space in the stack frame of the caller.  This temporary space  is  automatically  freed  when the function that called alloca() returns to its caller.
+
+ 
+#+begin_src c
+  #define _GNU_SOURCE
+  int main() {
+
+  	const char * str = "XD-zynexOS";
+
+  	char *dupstr = strdupa(str);
+
+  	printf("address of str[1] : %p\n", &str[1]);
+  	printf("address of dupstr[1] : %p\n", &dupstr[1]);
+  	printf("address of str : %p\n", &str);
+
+  	return 0;
+  }
+#+end_src
+
+记住要想使用strdupa等族函数要定义一个宏，因为man手册当中提到_GNU_SOURCE.当我们查看输出信息发现，其地址确实位于栈上，且不需要free操作。
+
+#+begin_src
+  address of str[1] : 0x10a005
+address of dupstr[1] : 0x1fff0000f1
+address of str : 0x1fff000110
+==294481== 
+==294481== HEAP SUMMARY:
+==294481==     in use at exit: 0 bytes in 0 blocks
+==294481==   total heap usage: 1 allocs, 1 frees, 1,024 bytes allocated
+==294481== 
+==294481== All heap blocks were freed -- no leaks are possible
+==294481== 
+==294481== For lists of detected and suppressed errors, rerun with: -s
+==294481== ERROR SUMMARY: 0 errors from 0 contexts (suppressed: 0 from 0)
+  
+address of str[1] : 0x55650e637005
+address of dupstr[1] : 0x7ffdc5055e91
+address of str : 0x7ffdc5055eb0
+#+end_src
