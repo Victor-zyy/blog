@@ -13,3 +13,10 @@
 #+begin_src sh
   patch -p0 < xx.patch
 #+end_src
+
+
+* git
+** 查看git config配置
+#+begin_src sh
+  git config --global --list
+#+end_src

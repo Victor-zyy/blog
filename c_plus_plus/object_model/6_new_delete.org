@@ -278,3 +278,14 @@ Basic_string use member placement operator new to store reference counting.
     return Allocator::allocate(s + extra * sizeof(charT));
   }
 #+end_src
+
+另外一种placement new的用法是在已经分配好内存上进行构造对象，适合自己实现内存池操作。
+
+
+#+begin_src c
+
+void *p = malloc( sizeof(int) ); // We have allocated storage but not started the lifetime of an object
+int *ip = new (p) int{0};        // Placement new changes the dynamic type of the object to int
+std::cout << *ip << "\n";        // *ip gives us a glvalue expression of type int which matches the dynamic type 
+                                 // of the allocated object
+#+end_src
